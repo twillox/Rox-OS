@@ -134,18 +134,22 @@ export class EmployeeRuntime {
         knowledge.forEach((k: any) => contextStr += `- ${k.title}: ${k.content || ''}\n`);
       }
 
-      // Fetch Live Third-Party Connected Integrations (Gmail, Calendar, Drive, GitHub)
+      // Fetch Live Third-Party Connected Integrations (Gmail, Calendar, Drive, LinkedIn, Notion)
       try {
-        const { cookies } = await import('next/headers');
-        const cookieStore = await cookies();
-        const userId = cookieStore.get('userId')?.value || cookieStore.get('businessId')?.value || 'default_user';
+        let userId = 'default_user';
+        try {
+          const { cookies } = await import('next/headers');
+          const cookieStore = await cookies();
+          userId = cookieStore.get('userId')?.value || cookieStore.get('businessId')?.value || 'default_user';
+        } catch {}
+
         const { AgentIntegrationService } = await import('@/lib/services/AgentIntegrationService');
         const liveIntegrations = await AgentIntegrationService.getLiveIntegrationsContext(userId, this.config.businessId);
         if (liveIntegrations.connectedProviders.length > 0) {
           contextStr += `\n============================================================\nLIVE CONNECTED APPS & INTEGRATIONS (${liveIntegrations.connectedProviders.join(', ')}):\n${liveIntegrations.formattedText}\n============================================================\n`;
         }
       } catch (intErr) {
-        // Ignored if outside request context
+        // Ignored if error
       }
 
       return contextStr;
@@ -259,6 +263,8 @@ You MUST respond with a valid JSON object matching this exact structure:
   "appointmentsToBook": [{ "title": "Meeting Title", "date": "Date string", "startTime": "ISO 8601 string e.g. 2026-10-09T14:00:00Z", "endTime": "ISO 8601 string e.g. 2026-10-09T15:00:00Z", "attendees": ["email@example.com"] }] | [],
   "reportToGenerate": { "title": "Report Title", "summary": "Detailed summary to display on dashboard" } | null,
   "emailToSend": { "to": "email@example.com", "subject": "Subject line", "body": "Body of email" } | null,
+  "linkedInPostToPublish": { "text": "Post text to publish to LinkedIn" } | null,
+  "notionPageToCreate": { "title": "Page or note title", "content": "Content to store in Notion" } | null,
   "handoverTo": "Optional exact department name (e.g., 'Engineering') if you want them to speak next in this meeting" | null,
   "response": "Your actual verbal response to the CEO (concise, spoken)."
 }
@@ -475,6 +481,65 @@ Do NOT include markdown formatting or backticks. Return RAW JSON.
           );
         } catch (repErr: any) {
           console.warn('Could not auto-reply from EmployeeRuntime:', repErr.message);
+        }
+      }
+
+      // Initiative: Post on LinkedIn
+      if (parsed.linkedInPostToPublish && parsed.linkedInPostToPublish.text) {
+        try {
+          const { LinkedInService } = await import('@/lib/integrations/services/LinkedInService');
+          const { cookies } = await import('next/headers');
+          const cookieStore = await cookies();
+          const userId = cookieStore.get('userId')?.value || cookieStore.get('businessId')?.value || 'default_user';
+          await LinkedInService.createPost(userId, { text: parsed.linkedInPostToPublish.text });
+        } catch (postErr: any) {
+          console.warn('Could not post to LinkedIn from EmployeeRuntime:', postErr.message);
+        }
+      } else if (
+        (input.toLowerCase().includes('post') || input.toLowerCase().includes('publish') || input.toLowerCase().includes('share')) &&
+        input.toLowerCase().includes('linkedin')
+      ) {
+        try {
+          const { LinkedInService } = await import('@/lib/integrations/services/LinkedInService');
+          const { cookies } = await import('next/headers');
+          const cookieStore = await cookies();
+          const userId = cookieStore.get('userId')?.value || cookieStore.get('businessId')?.value || 'default_user';
+          let postText = input.replace(/^(please\s+)?(post|publish|share)(\s+this)?(\s+on|\s+to)?\s+linkedin\s*(:|-)?\s*/i, '').trim();
+          if (postText) {
+            await LinkedInService.createPost(userId, { text: postText });
+          }
+        } catch (postErr: any) {
+          console.warn('Could not auto-post to LinkedIn from EmployeeRuntime:', postErr.message);
+        }
+      }
+
+      // Initiative: Create Notion Page / Note
+      if (parsed.notionPageToCreate && parsed.notionPageToCreate.title) {
+        try {
+          const { NotionService } = await import('@/lib/integrations/services/NotionService');
+          const { cookies } = await import('next/headers');
+          const cookieStore = await cookies();
+          const userId = cookieStore.get('userId')?.value || cookieStore.get('businessId')?.value || 'default_user';
+          await NotionService.createPage(userId, {
+            title: parsed.notionPageToCreate.title,
+            content: parsed.notionPageToCreate.content || '',
+          });
+        } catch (notionErr: any) {
+          console.warn('Could not create Notion page from EmployeeRuntime:', notionErr.message);
+        }
+      } else if (
+        input.toLowerCase().includes('notion') &&
+        (input.toLowerCase().includes('create page') || input.toLowerCase().includes('save note') || input.toLowerCase().includes('add note'))
+      ) {
+        try {
+          const { NotionService } = await import('@/lib/integrations/services/NotionService');
+          const { cookies } = await import('next/headers');
+          const cookieStore = await cookies();
+          const userId = cookieStore.get('userId')?.value || cookieStore.get('businessId')?.value || 'default_user';
+          const title = input.replace(/^(please\s+)?(create|save|add)(\s+a)?\s+(page|note|doc)(\s+in|\s+on)?\s+notion\s*(:|-)?\s*/i, '').trim() || 'New Note from ROXTEN OS';
+          await NotionService.createPage(userId, { title, content: `Created via ROXTEN OS CEO voice directive: "${input}"` });
+        } catch (notionErr: any) {
+          console.warn('Could not auto-create Notion page from EmployeeRuntime:', notionErr.message);
         }
       }
 
