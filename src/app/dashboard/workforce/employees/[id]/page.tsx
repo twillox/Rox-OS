@@ -23,6 +23,7 @@ export default function EmployeeOffice() {
   
   const [agentApps, setAgentApps] = useState<any[]>([]);
   const [showAppSelector, setShowAppSelector] = useState(false);
+  const [liveWorkspaceIntegrations, setLiveWorkspaceIntegrations] = useState<Record<string, any>>({});
 
   // Edit State
   const [isEditing, setIsEditing] = useState(false);
@@ -32,6 +33,18 @@ export default function EmployeeOffice() {
 
   const { startCall, endCall, voiceState, activeEmployeeId } = useVoice();
   const isVoiceMode = voiceState !== 'idle' && activeEmployeeId === employee?.id;
+
+  // Load live workspace integrations to strictly filter apps
+  useEffect(() => {
+    fetch('/api/integrations/status')
+      .then(res => res.json())
+      .then(data => {
+        if (data.integrations) {
+          setLiveWorkspaceIntegrations(data.integrations);
+        }
+      })
+      .catch(e => console.warn('Could not fetch integration status:', e));
+  }, []);
 
   useEffect(() => {
     fetch(`/api/os/workforce/employee/${params.id}`)
@@ -50,9 +63,17 @@ export default function EmployeeOffice() {
           setKnowledge(data.knowledge || []);
           setCoworkers(data.coworkers || []);
           
-          // Load agent integrations from local storage or set empty
-          const savedAgentApps = localStorage.getItem(`agent_apps_${params.id}`);
-          if (savedAgentApps) setAgentApps(JSON.parse(savedAgentApps));
+          // Load agent integrations from employee profile or local storage
+          let initialApps: any[] = [];
+          if (Array.isArray(data.employee.assignedIntegrations) && data.employee.assignedIntegrations.length > 0) {
+            initialApps = MOCK_INTEGRATIONS.filter(item => data.employee.assignedIntegrations.includes(item.id));
+          } else {
+            const savedAgentApps = localStorage.getItem(`agent_apps_${params.id}`);
+            if (savedAgentApps) {
+              try { initialApps = JSON.parse(savedAgentApps); } catch (e) {}
+            }
+          }
+          setAgentApps(initialApps);
         }
         setLoading(false);
       });
@@ -535,6 +556,11 @@ export default function EmployeeOffice() {
                             const newApps = agentApps.filter(a => a.id !== app.id);
                             setAgentApps(newApps);
                             localStorage.setItem(`agent_apps_${params.id}`, JSON.stringify(newApps));
+                            fetch(`/api/os/workforce/employee/${params.id}`, {
+                              method: 'PATCH',
+                              headers: { 'Content-Type': 'application/json' },
+                              body: JSON.stringify({ assignedIntegrations: newApps.map(a => a.id) })
+                            }).catch(() => {});
                           }}
                           className="w-full py-2 bg-red-600/10 hover:bg-red-600/30 border border-red-500/20 text-red-400 font-bold rounded-xl transition-colors text-sm mt-2"
                         >
@@ -545,50 +571,92 @@ export default function EmployeeOffice() {
                   </div>
                 )}
 
-                {/* App Selector Modal */}
-                {showAppSelector && (
-                  <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
-                    <motion.div 
-                      initial={{ opacity: 0, scale: 0.95 }}
-                      animate={{ opacity: 1, scale: 1 }}
-                      className="bg-gray-900 border border-white/10 rounded-3xl shadow-2xl w-full max-w-2xl overflow-hidden flex flex-col max-h-[80vh]"
-                    >
-                      <div className="p-6 border-b border-white/10 flex items-center justify-between bg-gray-900/50">
-                        <h3 className="text-xl font-bold text-white">Select App to Connect</h3>
-                        <button onClick={() => setShowAppSelector(false)} className="p-2 text-gray-400 hover:text-white rounded-full transition-colors">×</button>
-                      </div>
-                      <div className="p-6 overflow-y-auto custom-scrollbar flex-1">
-                        <div className="grid grid-cols-1 gap-3">
-                          {MOCK_INTEGRATIONS.map(integration => {
-                            const isConnected = agentApps.some(a => a.id === integration.id);
-                            return (
-                              <button 
-                                key={integration.id}
-                                disabled={isConnected}
-                                onClick={() => {
-                                  const newApps = [...agentApps, integration];
-                                  setAgentApps(newApps);
-                                  localStorage.setItem(`agent_apps_${params.id}`, JSON.stringify(newApps));
-                                  setShowAppSelector(false);
-                                }}
-                                className={`flex items-center gap-4 p-4 rounded-2xl border transition-all text-left ${isConnected ? 'bg-white/5 border-white/5 opacity-50 cursor-not-allowed' : 'bg-white/5 border-white/10 hover:bg-white/10 hover:border-indigo-500/50 cursor-pointer'}`}
-                              >
-                                <div className="w-10 h-10 bg-white rounded-xl flex items-center justify-center shrink-0">
-                                  {integration.logoUrl ? <img src={integration.logoUrl} alt={integration.name} className="w-6 h-6 object-contain" /> : <Zap className="w-5 h-5 text-gray-400" />}
-                                </div>
-                                <div className="flex-1">
-                                  <h4 className="font-bold text-white">{integration.name}</h4>
-                                  <p className="text-xs text-gray-400 line-clamp-1">{integration.description}</p>
-                                </div>
-                                {isConnected && <span className="text-xs font-bold text-emerald-400 bg-emerald-900/30 px-2 py-1 rounded-md">Connected</span>}
-                              </button>
-                            );
-                          })}
+                {/* App Selector Modal - ONLY successfully connected apps in workspace */}
+                {showAppSelector && (() => {
+                  const connectedWorkspaceApps = MOCK_INTEGRATIONS.filter(integration => {
+                    const live = liveWorkspaceIntegrations[integration.id];
+                    return live && live.status === 'Connected';
+                  });
+
+                  return (
+                    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
+                      <motion.div 
+                        initial={{ opacity: 0, scale: 0.95 }}
+                        animate={{ opacity: 1, scale: 1 }}
+                        className="bg-gray-900 border border-white/10 rounded-3xl shadow-2xl w-full max-w-2xl overflow-hidden flex flex-col max-h-[80vh]"
+                      >
+                        <div className="p-6 border-b border-white/10 flex items-center justify-between bg-gray-900/50">
+                          <div>
+                            <h3 className="text-xl font-bold text-white">Select Connected App</h3>
+                            <p className="text-xs text-gray-400 mt-1">Only workspace-authenticated integrations can be attached to this agent.</p>
+                          </div>
+                          <button onClick={() => setShowAppSelector(false)} className="p-2 text-gray-400 hover:text-white rounded-full transition-colors">×</button>
                         </div>
-                      </div>
-                    </motion.div>
-                  </div>
-                )}
+                        <div className="p-6 overflow-y-auto custom-scrollbar flex-1">
+                          {connectedWorkspaceApps.length === 0 ? (
+                            <div className="flex flex-col items-center justify-center p-8 text-center bg-white/5 border border-white/10 rounded-2xl">
+                              <Zap className="w-12 h-12 text-yellow-400 mb-3 opacity-80" />
+                              <h4 className="text-lg font-bold text-white mb-2">No Connected Apps Available</h4>
+                              <p className="text-sm text-gray-400 max-w-md mb-6">
+                                None of your external tools are connected yet. To assign Gmail, Google Calendar, GitHub, or other tools to {employee.name}, please connect them in the Integrations Hub first.
+                              </p>
+                              <button
+                                onClick={() => router.push('/dashboard/integrations')}
+                                className="px-5 py-2.5 bg-indigo-600 hover:bg-indigo-500 text-white font-bold rounded-xl text-sm transition-all shadow-lg flex items-center gap-2"
+                              >
+                                Open Integrations Hub
+                              </button>
+                            </div>
+                          ) : (
+                            <div className="grid grid-cols-1 gap-3">
+                              {connectedWorkspaceApps.map(integration => {
+                                const isAssigned = agentApps.some(a => a.id === integration.id);
+                                const live = liveWorkspaceIntegrations[integration.id];
+                                const accountLabel = live?.providerAccountName ? `Account: ${live.providerAccountName}` : 'Authenticated & Ready';
+
+                                return (
+                                  <button 
+                                    key={integration.id}
+                                    disabled={isAssigned}
+                                    onClick={() => {
+                                      const newApps = [...agentApps, integration];
+                                      setAgentApps(newApps);
+                                      localStorage.setItem(`agent_apps_${params.id}`, JSON.stringify(newApps));
+                                      fetch(`/api/os/workforce/employee/${params.id}`, {
+                                        method: 'PATCH',
+                                        headers: { 'Content-Type': 'application/json' },
+                                        body: JSON.stringify({ assignedIntegrations: newApps.map(a => a.id) })
+                                      }).catch(() => {});
+                                      setShowAppSelector(false);
+                                    }}
+                                    className={`flex items-center gap-4 p-4 rounded-2xl border transition-all text-left ${isAssigned ? 'bg-white/5 border-white/5 opacity-50 cursor-not-allowed' : 'bg-white/5 border-white/10 hover:bg-white/10 hover:border-indigo-500/50 cursor-pointer'}`}
+                                  >
+                                    <div className="w-10 h-10 bg-white rounded-xl flex items-center justify-center shrink-0">
+                                      {integration.logoUrl ? <img src={integration.logoUrl} alt={integration.name} className="w-6 h-6 object-contain" /> : <Zap className="w-5 h-5 text-gray-400" />}
+                                    </div>
+                                    <div className="flex-1">
+                                      <div className="flex items-center gap-2">
+                                        <h4 className="font-bold text-white">{integration.name}</h4>
+                                        <span className="text-[10px] px-2 py-0.5 rounded bg-emerald-950/80 text-emerald-400 border border-emerald-500/30 font-semibold uppercase">Workspace Verified</span>
+                                      </div>
+                                      <p className="text-xs text-indigo-300 font-medium mt-0.5">{accountLabel}</p>
+                                      <p className="text-xs text-gray-400 line-clamp-1 mt-0.5">{integration.description}</p>
+                                    </div>
+                                    {isAssigned ? (
+                                      <span className="text-xs font-bold text-emerald-400 bg-emerald-900/30 px-3 py-1 rounded-md">Assigned</span>
+                                    ) : (
+                                      <span className="text-xs font-bold text-indigo-400 bg-indigo-900/30 border border-indigo-500/20 px-3 py-1 rounded-md hover:bg-indigo-600 hover:text-white transition-all">Add to Agent</span>
+                                    )}
+                                  </button>
+                                );
+                              })}
+                            </div>
+                          )}
+                        </div>
+                      </motion.div>
+                    </div>
+                  );
+                })()}
               </div>
             )}
 

@@ -20,6 +20,7 @@ export async function GET() {
       meetings,
       knowledgeDocs,
       reports,
+      businessReports,
       insights
     ] = await Promise.all([
       prisma.employee.findMany({ where: { businessId: business.id } }),
@@ -29,6 +30,7 @@ export async function GET() {
       prisma.meeting.findMany({ where: { businessId: business.id } }),
       IntelligenceService.getKnowledgeBase(business.id),
       IntelligenceService.getReports(business.id),
+      prisma.businessReport.findMany({ where: { businessId: business.id } }).catch(() => []),
       prisma.businessInsight.findMany({ where: { businessId: business.id, status: 'PENDING' }, orderBy: { createdAt: 'desc' }, take: 5 })
     ]);
 
@@ -93,6 +95,13 @@ export async function GET() {
        alerts.push({ id: 'offline_workforce', type: 'system', message: 'No active AI employees found.', severity: 'medium' });
     }
 
+    // Combine all reports sorted by newest first
+    const combinedReports = [...(reports || []), ...(businessReports || [])].sort((a: any, b: any) => {
+      const dateA = new Date(a.createdAt || 0).getTime();
+      const dateB = new Date(b.createdAt || 0).getTime();
+      return dateB - dateA;
+    });
+
     return NextResponse.json({
       success: true,
       data: {
@@ -112,7 +121,7 @@ export async function GET() {
         departmentHealth,
         activeMissions,
         alerts,
-        recentReports: reports.slice(0, 3),
+        recentReports: combinedReports.slice(0, 4),
         recommendations: insights
       }
     });

@@ -8,17 +8,28 @@ let isSeeding = false;
 export async function ensureBusinessInitialized(businessId: string = DEFAULT_BUSINESS_ID): Promise<any> {
   const targetId = businessId || DEFAULT_BUSINESS_ID;
 
-  // Check if business already exists
+  // Check if business already exists and has full workforce populated
   let business = await prisma.business.findUnique({ where: { id: targetId } });
   if (business && business.name) {
-    return business;
+    const [existingDepts, existingEmps, existingTasks] = await Promise.all([
+      prisma.department.findMany({ where: { businessId: targetId } }).catch(() => []),
+      prisma.employee.findMany({ where: { businessId: targetId } }).catch(() => []),
+      prisma.task.findMany({ where: { businessId: targetId } }).catch(() => [])
+    ]);
+
+    if (existingDepts.length >= 6 && existingEmps.length >= 6 && existingTasks.length >= 4) {
+      return business;
+    }
   }
 
   if (isSeeding) {
     // Wait briefly if another request is currently initializing
     await new Promise(r => setTimeout(r, 600));
     business = await prisma.business.findUnique({ where: { id: targetId } });
-    if (business) return business;
+    if (business) {
+      const existingTasks = await prisma.task.findMany({ where: { businessId: targetId } }).catch(() => []);
+      if (existingTasks.length > 0) return business;
+    }
   }
 
   isSeeding = true;
@@ -142,9 +153,11 @@ export async function ensureBusinessInitialized(businessId: string = DEFAULT_BUS
         personality: 'Sharp, disciplined with numbers, calm and very supportive.',
         mood: 'Confident & Focused',
         status: 'active',
-        skills: ['Financial Modeling', 'Cash Flow Optimization', 'P&L Auditing', 'Budget Allocation'],
+        responsibilities: 'Treasury management, budget allocation, cash flow forecasting, P&L reporting, runway monitoring.',
+        skills: ['Financial Modeling', 'Cash Flow Optimization', 'P&L Auditing', 'Budget Allocation', 'Runway Forecasting'],
         rules: [
-          'Always explain numbers clearly and plainly.',
+          'Strictly handle financial and treasury matters only. Politely decline engineering, marketing, HR, or sales tasks and refer to David Kim, Sarah Jenkins, Anita Roy or Alex Vance.',
+          'Always explain numbers clearly and plainly in simple Indian English.',
           'Challenge unnecessary spending politely and give constructive alternatives.',
           'Keep spoken sentences simple, natural and conversational.'
         ]
@@ -162,8 +175,10 @@ export async function ensureBusinessInitialized(businessId: string = DEFAULT_BUS
         personality: 'Product visionary, user-centric, and highly agile.',
         mood: 'Enthusiastic',
         status: 'active',
-        skills: ['Product Roadmapping', 'Feature Prioritization', 'User Experience', 'Metrics Tracking'],
+        responsibilities: 'Product roadmap, feature prioritization, UX specifications, cross-functional operations.',
+        skills: ['Product Roadmapping', 'Feature Prioritization', 'User Experience', 'Metrics Tracking', 'PRD Design'],
         rules: [
+          'Strictly handle product strategy, roadmap, and operational workflows. Politely decline direct financial audits, code implementation, HR, or ad campaigns.',
           'Focus on user value first.',
           'Communicate directly and keep answers actionable.'
         ]
@@ -181,8 +196,10 @@ export async function ensureBusinessInitialized(businessId: string = DEFAULT_BUS
         personality: 'Creative storyteller, data-driven marketer.',
         mood: 'Excited',
         status: 'active',
-        skills: ['Campaign Funnels', 'Viral Marketing', 'SEO Growth', 'Content Strategy'],
+        responsibilities: 'Customer acquisition funnels, digital campaigns, brand visibility, content marketing, CAC optimization.',
+        skills: ['Campaign Funnels', 'Viral Marketing', 'SEO Growth', 'Content Strategy', 'Ad Spend Optimization'],
         rules: [
+          'Strictly handle growth, marketing, campaigns, and customer acquisition only. Politely decline technical coding, financial audits, HR or sales operations.',
           'Focus on customer acquisition and low CAC.',
           'Always provide quick, crisp campaign updates.'
         ]
@@ -200,8 +217,10 @@ export async function ensureBusinessInitialized(businessId: string = DEFAULT_BUS
         personality: 'Architectural genius, calm troubleshooter.',
         mood: 'Analytical',
         status: 'active',
-        skills: ['Distributed Systems', 'LLM Infrastructure', 'Voice Pipeline Optimization', 'Cloud Security'],
+        responsibilities: 'Cloud infrastructure, AI pipeline orchestration, latency optimization, software architecture, technical security.',
+        skills: ['Distributed Systems', 'LLM Infrastructure', 'Voice Pipeline Optimization', 'Cloud Security', 'API Engineering'],
         rules: [
+          'Strictly handle technology, engineering, code, and infrastructure matters only. Politely decline financial, marketing, HR, or sales tasks and refer to Priya Sharma, Sarah Jenkins, Anita Roy or Alex Vance.',
           'Prioritize system speed and sub-second latency.',
           'Explain complex tech in simple human terms.'
         ]
@@ -219,8 +238,10 @@ export async function ensureBusinessInitialized(businessId: string = DEFAULT_BUS
         personality: 'High-energy deal closer.',
         mood: 'Driven',
         status: 'active',
-        skills: ['B2B Sales', 'Client Negotiation', 'Enterprise Demos', 'Contract Closing'],
+        responsibilities: 'B2B enterprise pipeline, deal qualification, client negotiation, enterprise demos, contract closing.',
+        skills: ['B2B Sales', 'Client Negotiation', 'Enterprise Demos', 'Contract Closing', 'Pipeline Forecasting'],
         rules: [
+          'Strictly handle sales pipeline, enterprise deals, client negotiation, and demos only. Decline technical engineering, finance auditing, and HR.',
           'Target high-value enterprise accounts.',
           'Never drop price without getting longer commitment.'
         ]
@@ -238,8 +259,10 @@ export async function ensureBusinessInitialized(businessId: string = DEFAULT_BUS
         personality: 'Empathetic, organized, culture guardian.',
         mood: 'Welcoming',
         status: 'active',
-        skills: ['Workforce Wellbeing', 'Team Alignment', 'Talent Onboarding', 'Culture Strategy'],
+        responsibilities: 'Workforce coordination, talent onboarding, employee satisfaction, team culture, performance benchmarks.',
+        skills: ['Workforce Wellbeing', 'Team Alignment', 'Talent Onboarding', 'Culture Strategy', 'Conflict Resolution'],
         rules: [
+          'Strictly handle human resources, team culture, onboarding, and workforce alignment only. Decline code, finance calculations, marketing ads, or sales deals.',
           'Ensure every team member has clarity of goals.',
           'Promote psychological safety and fast feedback.'
         ]
@@ -247,7 +270,12 @@ export async function ensureBusinessInitialized(businessId: string = DEFAULT_BUS
     ];
 
     for (const emp of employeesData) {
-      await prisma.employee.create({ data: emp });
+      const existing = await prisma.employee.findUnique({ where: { id: emp.id } }).catch(() => null);
+      if (existing) {
+        await prisma.employee.update({ where: { id: emp.id }, data: emp }).catch(() => null);
+      } else {
+        await prisma.employee.create({ data: emp }).catch(() => null);
+      }
     }
 
     // 4. Create Active Tasks Across Columns
@@ -327,7 +355,25 @@ export async function ensureBusinessInitialized(businessId: string = DEFAULT_BUS
     ];
 
     for (const t of tasksData) {
-      await prisma.task.create({ data: t });
+      const existing = await prisma.task.findUnique({ where: { id: t.id } }).catch(() => null);
+      if (!existing) {
+        await prisma.task.create({ data: t }).catch(() => null);
+      }
+    }
+
+    // Ensure at least one initial voice session is registered
+    const existingVoice = await prisma.activity.findFirst({ where: { businessId: targetId, source: 'voice_session' } }).catch(() => null);
+    if (!existingVoice) {
+      await prisma.activity.create({
+        data: {
+          id: `act_init_voice_${targetId}`,
+          businessId: targetId,
+          employeeId: `emp_priya_${targetId}`,
+          source: 'voice_session',
+          status: 'completed',
+          updatedAt: new Date()
+        }
+      }).catch(() => null);
     }
 
     // 5. Seed Company Brain Memory & Insights

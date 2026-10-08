@@ -102,7 +102,7 @@ export class VoiceStudioService {
         employeeId: fallbackEmployeeId || 'jarvis'
       };
       VoiceStudioService.activeSessions.set(sessionId, session);
-    } else if (fallbackEmployeeId && (!session.employeeId || session.employeeId === 'jarvis')) {
+    } else if (fallbackEmployeeId && fallbackEmployeeId !== 'jarvis') {
       session.employeeId = fallbackEmployeeId;
     }
 
@@ -160,28 +160,54 @@ export class VoiceStudioService {
       if (!employee) {
         try {
           employee = await prisma.employee.findFirst({
-            where: { name: session.employeeId }
+            where: { id: { contains: session.employeeId } },
+            include: { department: true }
+          });
+        } catch (e) {}
+      }
+
+      if (!employee) {
+        try {
+          employee = await prisma.employee.findFirst({
+            where: { name: { contains: session.employeeId, mode: 'insensitive' } },
+            include: { department: true }
           });
         } catch (e) {}
       }
 
       if (employee) {
         empName = employee.name || 'AI Assistant';
+        const employeeRules: string[] = [
+          ...(Array.isArray(employee.rules) ? employee.rules : (employee.rules ? [employee.rules] : [])),
+          ...(Array.isArray(employee.decisionBoundaries) ? employee.decisionBoundaries : (employee.decisionBoundaries ? [employee.decisionBoundaries] : []))
+        ];
+
+        const employeeSkills: string[] = Array.isArray(employee.skills) 
+          ? employee.skills 
+          : (typeof employee.skills === 'string' ? employee.skills.split(',').map((s: string) => s.trim()) : []);
+
+        const responsibilitiesStr = Array.isArray(employee.responsibilities) 
+          ? employee.responsibilities.join('; ') 
+          : (employee.responsibilities || '');
+
         runtime = new EmployeeRuntime({
           id: employee.id,
           businessId: employee.businessId || effectiveBizId,
           name: employee.name,
           role: employee.role,
           department: employee.department?.name || 'General',
-          personality: employee.personality || 'Professional',
-          rules: Array.isArray(employee.decisionBoundaries) ? employee.decisionBoundaries : [employee.decisionBoundaries].filter(Boolean),
+          personality: employee.personality || 'Professional, crisp, and executive',
+          rules: employeeRules,
+          skills: employeeSkills,
+          responsibilities: responsibilitiesStr,
+          decisionBoundaries: employee.decisionBoundaries || '',
           knowledgeTags: employee.knowledgeAccessTags || [],
           voiceId: employee.voiceId || employee.selectedVoiceId || 'default',
           speakingStyle: employee.communicationStyle || employee.speakingStyle || 'natural and concise',
           mood: employee.mood || 'neutral',
           temperature: employee.temperature || 0.7,
           context: `You are ${employee.name}, the ${employee.role} in ${employee.department?.name || 'General'}.
-Your responsibilities: ${employee.responsibilities || 'General duties'}.
+Your responsibilities: ${responsibilitiesStr || 'General duties'}.
 Your goals: ${employee.goals || 'Serve the company'}.
 Your communication style: ${employee.communicationStyle || 'Professional'}.
 Your decision boundaries: ${employee.decisionBoundaries || 'None specified'}.`

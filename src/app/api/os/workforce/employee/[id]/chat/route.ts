@@ -43,7 +43,13 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
       return NextResponse.json({ text: responseText, voiceId: 'jarvis', handoverEmployee });
     }
 
-    const employee = await prisma.employee.findUnique({
+    // Ensure business is seeded if needed
+    try {
+      const { ensureBusinessInitialized } = await import('@/lib/services/SeedService');
+      await ensureBusinessInitialized();
+    } catch (e) {}
+
+    let employee = await prisma.employee.findUnique({
       where: { id },
       include: {
         department: true
@@ -51,8 +57,35 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
     });
 
     if (!employee) {
+      employee = await prisma.employee.findFirst({
+        where: { id: { contains: id } },
+        include: { department: true }
+      });
+    }
+
+    if (!employee) {
+      employee = await prisma.employee.findFirst({
+        where: { name: { contains: id, mode: 'insensitive' } },
+        include: { department: true }
+      });
+    }
+
+    if (!employee) {
       return NextResponse.json({ error: 'Employee not found' }, { status: 404 });
     }
+
+    const employeeRules: string[] = [
+      ...(Array.isArray(employee.rules) ? employee.rules : (employee.rules ? [employee.rules] : [])),
+      ...(Array.isArray(employee.decisionBoundaries) ? employee.decisionBoundaries : (employee.decisionBoundaries ? [employee.decisionBoundaries] : []))
+    ];
+
+    const employeeSkills: string[] = Array.isArray(employee.skills) 
+      ? employee.skills 
+      : (typeof employee.skills === 'string' ? employee.skills.split(',').map((s: string) => s.trim()) : []);
+
+    const responsibilitiesStr = Array.isArray(employee.responsibilities) 
+      ? employee.responsibilities.join('; ') 
+      : (employee.responsibilities || '');
 
     // Spin up the runtime
     const runtime = new EmployeeRuntime({
@@ -61,15 +94,18 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
       name: employee.name,
       role: employee.role,
       department: employee.department?.name || 'General',
-      personality: employee.personality || 'Professional',
-      rules: Array.isArray(employee.decisionBoundaries) ? employee.decisionBoundaries : [employee.decisionBoundaries].filter(Boolean),
+      personality: employee.personality || 'Professional, crisp, and executive',
+      rules: employeeRules,
+      skills: employeeSkills,
+      responsibilities: responsibilitiesStr,
+      decisionBoundaries: employee.decisionBoundaries || '',
       knowledgeTags: employee.knowledgeAccessTags || [],
       voiceId: employee.voiceId || employee.selectedVoiceId || 'default',
       speakingStyle: employee.communicationStyle || employee.speakingStyle || 'natural and concise',
       mood: employee.mood || 'neutral',
       temperature: employee.temperature || 0.7,
       context: `You are ${employee.name}, the ${employee.role} in ${employee.department?.name || 'General'}.
-Your responsibilities: ${employee.responsibilities || 'General duties'}.
+Your responsibilities: ${responsibilitiesStr || 'General duties'}.
 Your goals: ${employee.goals || 'Serve the company'}.
 Your communication style: ${employee.communicationStyle || 'Professional'}.
 Your decision boundaries: ${employee.decisionBoundaries || 'None specified'}.`

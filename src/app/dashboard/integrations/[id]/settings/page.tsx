@@ -2,7 +2,7 @@
 
 import React, { useState, useEffect } from 'react';
 import { useParams, useRouter } from 'next/navigation';
-import { ArrowLeft, Server, Shield, Activity, PowerOff, Zap, CheckCircle } from 'lucide-react';
+import { ArrowLeft, Server, Shield, Activity, PowerOff, Zap, CheckCircle, RefreshCw } from 'lucide-react';
 import { MOCK_INTEGRATIONS, Integration } from '@/lib/mock/integrations/data';
 
 export default function IntegrationSettings() {
@@ -11,28 +11,59 @@ export default function IntegrationSettings() {
   const id = params.id as string;
   
   const [integration, setIntegration] = useState<Integration | null>(null);
+  const [connectedAccount, setConnectedAccount] = useState<string | null>(null);
   const [syncFreq, setSyncFreq] = useState('realtime');
   const [autoSync, setAutoSync] = useState(true);
+  const [disconnecting, setDisconnecting] = useState(false);
 
   useEffect(() => {
-    const saved = localStorage.getItem('roxten_integrations');
-    const all = saved ? JSON.parse(saved) : MOCK_INTEGRATIONS;
-    const found = all.find((i: any) => i.id === id);
-    if (found) setIntegration(found);
+    const loadIntegrationData = async () => {
+      const base = MOCK_INTEGRATIONS.find((i: any) => i.id === id);
+      if (!base) return;
+
+      try {
+        const res = await fetch('/api/integrations/status', { cache: 'no-store' });
+        if (res.ok) {
+          const data = await res.json();
+          const live = data.integrations?.[id];
+          if (live && live.status === 'Connected') {
+            setIntegration({
+              ...base,
+              status: 'Connected',
+              scopes: live.scopes?.length ? live.scopes : base.scopes,
+            });
+            setConnectedAccount(live.providerAccountName || null);
+            return;
+          }
+        }
+      } catch (e) {
+        console.error('Failed to load live status in settings', e);
+      }
+
+      setIntegration(base);
+    };
+
+    loadIntegrationData();
   }, [id]);
 
-  const handleDisconnect = () => {
+  const handleDisconnect = async () => {
     if (!integration) return;
-    const saved = localStorage.getItem('roxten_integrations');
-    if (saved) {
-      const all = JSON.parse(saved);
-      const updated = all.map((i: Integration) => i.id === id ? { ...i, status: 'Disconnected', lastActivity: undefined } : i);
-      localStorage.setItem('roxten_integrations', JSON.stringify(updated));
+    const confirm = window.confirm(`Disconnect ${integration.name}? All active synchronization and encrypted credentials will be removed.`);
+    if (!confirm) return;
+
+    try {
+      setDisconnecting(true);
+      await fetch(`/api/integrations/${id}/disconnect`, { method: 'POST' });
+      router.push('/dashboard/integrations');
+    } catch (e) {
+      console.error('Error disconnecting:', e);
+      alert('Failed to disconnect integration');
+    } finally {
+      setDisconnecting(false);
     }
-    router.push('/dashboard/integrations');
   };
 
-  if (!integration) return <div className="p-8">Loading Settings...</div>;
+  if (!integration) return <div className="p-8 text-gray-500 font-sans">Loading Settings...</div>;
 
   return (
     <div className="flex flex-col h-full bg-[#fbfbfe] overflow-hidden text-gray-900 font-sans relative">
@@ -42,7 +73,7 @@ export default function IntegrationSettings() {
         </button>
         <div>
           <h1 className="text-lg font-bold text-gray-900">{integration.name} Settings</h1>
-          <p className="text-xs text-gray-500">Manage connection and sync preferences</p>
+          <p className="text-xs text-gray-500">Manage connection, scopes, and synchronization preferences</p>
         </div>
       </div>
 
@@ -60,12 +91,17 @@ export default function IntegrationSettings() {
             <div className="flex-1">
               <div className="flex items-center justify-between mb-1">
                 <h2 className="text-xl font-bold text-gray-900">{integration.name}</h2>
-                <span className={`text-xs font-bold px-2 py-1 rounded-md ${integration.status === 'Connected' ? 'bg-emerald-100 text-emerald-700' : 'bg-gray-100 text-gray-600'}`}>
+                <span className={`text-xs font-bold px-2.5 py-1 rounded-md ${integration.status === 'Connected' ? 'bg-emerald-100 text-emerald-700' : 'bg-gray-100 text-gray-600'}`}>
                   {integration.status}
                 </span>
               </div>
               <p className="text-sm text-gray-500 mb-2">{integration.description}</p>
-              <p className="text-xs font-medium text-gray-400">Version: {integration.version}</p>
+              {connectedAccount && (
+                <p className="text-xs font-bold text-emerald-700 mb-1">
+                  Connected Account: <span className="font-medium text-gray-800">{connectedAccount}</span>
+                </p>
+              )}
+              <p className="text-xs font-medium text-gray-400">Security: AES-256-GCM Encrypted Vault</p>
             </div>
           </div>
 
@@ -83,7 +119,7 @@ export default function IntegrationSettings() {
                   onChange={e => setSyncFreq(e.target.value)}
                   className="w-full bg-gray-50 border border-gray-200 text-sm font-medium rounded-lg py-2.5 px-3 focus:ring-2 focus:ring-indigo-500"
                 >
-                  <option value="realtime">Real-time (Webhooks)</option>
+                  <option value="realtime">Real-time (OAuth & Webhooks)</option>
                   <option value="15m">Every 15 Minutes</option>
                   <option value="1h">Hourly</option>
                   <option value="daily">Daily</option>
@@ -107,18 +143,18 @@ export default function IntegrationSettings() {
             <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100 space-y-4">
               <div className="flex items-center gap-2 mb-2">
                 <Shield className="w-5 h-5 text-indigo-600" />
-                <h3 className="font-bold text-gray-900">Access & Scopes</h3>
+                <h3 className="font-bold text-gray-900">Granted Scopes & Permissions</h3>
               </div>
               <ul className="space-y-3">
                 {integration.scopes.length > 0 ? integration.scopes.map(s => (
                   <li key={s} className="flex items-start gap-2 text-sm text-gray-700">
                     <CheckCircle className="w-4 h-4 text-emerald-500 shrink-0 mt-0.5" />
-                    <span>{s}</span>
+                    <span className="text-xs font-mono">{s}</span>
                   </li>
                 )) : (
                   <li className="flex items-start gap-2 text-sm text-gray-700">
                     <CheckCircle className="w-4 h-4 text-emerald-500 shrink-0 mt-0.5" />
-                    <span>Full read/write access</span>
+                    <span>Standard workspace access</span>
                   </li>
                 )}
               </ul>
@@ -128,13 +164,14 @@ export default function IntegrationSettings() {
           <div className="bg-red-50 p-6 rounded-2xl border border-red-100 flex items-center justify-between mt-8">
             <div>
               <h3 className="font-bold text-red-900">Danger Zone</h3>
-              <p className="text-sm text-red-700 mt-1">Disconnecting will immediately halt all data syncing.</p>
+              <p className="text-sm text-red-700 mt-1">Disconnecting will revoke server access and remove encrypted tokens.</p>
             </div>
             <button 
               onClick={handleDisconnect}
-              className="px-4 py-2 bg-red-600 hover:bg-red-700 text-white font-bold rounded-xl text-sm transition flex items-center gap-2 shadow-sm"
+              disabled={disconnecting}
+              className="px-4 py-2 bg-red-600 hover:bg-red-700 text-white font-bold rounded-xl text-sm transition flex items-center gap-2 shadow-sm disabled:opacity-50"
             >
-              <PowerOff className="w-4 h-4" /> Disconnect
+              {disconnecting ? <RefreshCw className="w-4 h-4 animate-spin" /> : <PowerOff className="w-4 h-4" />} Disconnect
             </button>
           </div>
 

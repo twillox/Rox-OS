@@ -26,7 +26,7 @@ class FirestoreAdapter {
       if (this.collectionName === 'companies') {
         const userId = cookieStore.get('userId')?.value;
         if (userId) constraints.push(where('userId', '==', userId));
-      } else if (this.collectionName !== 'users' && this.collectionName !== 'employeeTemplates' && this.collectionName !== 'voiceProfiles') {
+      } else if (this.collectionName !== 'users' && this.collectionName !== 'employeeTemplates' && this.collectionName !== 'voiceProfiles' && this.collectionName !== 'integrations' && this.collectionName !== 'integration') {
         const businessId = cookieStore.get('businessId')?.value;
         if (businessId) {
            if (!whereObj || whereObj.businessId !== 'system') {

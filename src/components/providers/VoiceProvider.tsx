@@ -59,6 +59,8 @@ export const VoiceProvider = ({ children }: { children: ReactNode }) => {
   const voiceStateRef = useRef<VoiceState>('idle');
   const isMutedRef = useRef(false);
   const activeEmployeeIdRef = useRef<string | null>(null);
+  const activeEmployeeNameRef = useRef<string | null>(null);
+  const activeEmployeeRoleRef = useRef<string | null>(null);
   const sessionIdRef = useRef<string | null>(null);
   const historyRef = useRef<{ role: string, content: string }[]>([]);
   const chatEndpointRef = useRef<string | null>(null);
@@ -69,11 +71,13 @@ export const VoiceProvider = ({ children }: { children: ReactNode }) => {
     voiceStateRef.current = voiceState;
     isMutedRef.current = isMuted;
     activeEmployeeIdRef.current = activeEmployeeId;
+    activeEmployeeNameRef.current = activeEmployeeName;
+    activeEmployeeRoleRef.current = activeEmployeeRole;
     sessionIdRef.current = sessionId;
     historyRef.current = history;
     chatEndpointRef.current = chatEndpoint;
     transcriptRef.current = transcript;
-  }, [voiceState, isMuted, activeEmployeeId, sessionId, history, chatEndpoint, transcript]);
+  }, [voiceState, isMuted, activeEmployeeId, activeEmployeeName, activeEmployeeRole, sessionId, history, chatEndpoint, transcript]);
 
   const synthRef = useRef<SpeechSynthesis | null>(null);
   const activeAudioRef = useRef<HTMLAudioElement | null>(null);
@@ -151,14 +155,30 @@ export const VoiceProvider = ({ children }: { children: ReactNode }) => {
     if (voiceStateRef.current !== 'reviewing') {
       setTranscript('');
       setInterimTranscript('');
+      transcriptRef.current = '';
     }
 
-    if (!recognitionRef.current) {
+    // Safely cleanup any previous recognition instance to prevent Chrome deadlocks
+    if (recognitionRef.current) {
+      try {
+        recognitionRef.current.onresult = null;
+        recognitionRef.current.onerror = null;
+        recognitionRef.current.onend = null;
+        recognitionRef.current.onstart = null;
+        recognitionRef.current.abort();
+      } catch (e) {}
+      recognitionRef.current = null;
+    }
+
+    try {
       const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
       const rec = new SpeechRecognition();
       rec.continuous = true;
       rec.interimResults = true;
-      rec.lang = 'en-US';
+      
+      // Auto-detect browser/regional language or default to en-IN for natural recognition
+      const userLang = (typeof navigator !== 'undefined' && navigator.language) ? navigator.language : 'en-IN';
+      rec.lang = userLang.startsWith('en') ? userLang : 'en-IN';
 
       rec.onresult = (event: any) => {
         // Prevent recording while reviewing or while AI is speaking
@@ -184,6 +204,7 @@ export const VoiceProvider = ({ children }: { children: ReactNode }) => {
 
         if (finalStr || interimStr) {
           if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
+          // Snappy 1100ms silence detection for fast, conversational turn-taking
           silenceTimerRef.current = setTimeout(() => {
             if (voiceStateRef.current === 'listening') {
               const fullSpeech = (transcriptRef.current + ' ' + (interimStr || '')).trim();
@@ -191,7 +212,7 @@ export const VoiceProvider = ({ children }: { children: ReactNode }) => {
                 handleVoiceInput(fullSpeech);
               }
             }
-          }, 1800);
+          }, 1100);
         }
       };
 
@@ -209,9 +230,9 @@ export const VoiceProvider = ({ children }: { children: ReactNode }) => {
         if (voiceStateRef.current === 'listening' && e.error !== 'not-allowed') {
           setTimeout(() => {
             if (!isMutedRef.current && voiceStateRef.current === 'listening') {
-              try { rec.start(); } catch (err) { }
+              startListening();
             }
-          }, 1000);
+          }, 250);
         } else if (e.error === 'not-allowed') {
           setVoiceState('idle');
         }
@@ -223,15 +244,21 @@ export const VoiceProvider = ({ children }: { children: ReactNode }) => {
 
       rec.onend = () => {
         if (!isMutedRef.current && voiceStateRef.current === 'listening') {
-          try { rec.start(); } catch (e) { }
+          setTimeout(() => {
+            if (!isMutedRef.current && voiceStateRef.current === 'listening') {
+              startListening();
+            }
+          }, 150);
         }
       };
 
       recognitionRef.current = rec;
-    }
 
-    if (!isMutedRef.current) {
-      try { recognitionRef.current.start(); } catch (e) { }
+      if (!isMutedRef.current) {
+        rec.start();
+      }
+    } catch (e: any) {
+      console.warn('SpeechRecognition initialization error:', e.message);
     }
   };
 
@@ -239,7 +266,13 @@ export const VoiceProvider = ({ children }: { children: ReactNode }) => {
     if (recognitionRef.current) {
       try { recognitionRef.current.stop(); } catch (e) { }
     }
-    setVoiceState('reviewing');
+    const currentSpeech = ((transcriptRef.current || transcript) + ' ' + interimTranscript).trim();
+    if (currentSpeech.length > 1) {
+      // Immediately submit the captured speech so user gets an instant response!
+      handleVoiceInput(currentSpeech);
+    } else {
+      setVoiceState('reviewing');
+    }
   };
 
   const submitTranscript = (textOverride?: string) => {
@@ -289,9 +322,12 @@ export const VoiceProvider = ({ children }: { children: ReactNode }) => {
     // Optimistically update history with user input
     setHistory(prev => [...prev, { role: 'user', content: text }]);
 
-    // Dashboard Voice Control Actions
-    const textLower = text.toLowerCase();
-    if (textLower.includes('financ') || textLower.includes('revenue') || textLower.includes('expense') || textLower.includes('money') || textLower.includes('records') || textLower.includes('digit')) {
+    // Dashboard Voice Control Actions - ONLY trigger if talking to JARVIS or explicit navigation command
+    const textLower = text.toLowerCase().trim();
+    const isJarvis = !currentActiveEmployeeId || currentActiveEmployeeId.toLowerCase().includes('jarvis');
+    const isExplicitOpen = textLower.startsWith('open ') || textLower.startsWith('go to ') || textLower.startsWith('navigate to ') || textLower.startsWith('show me the ');
+
+    if ((isJarvis || isExplicitOpen) && (textLower.includes('financ') || textLower.includes('revenue') || textLower.includes('expense') || textLower.includes('records') || textLower.includes('digit'))) {
       if (typeof window !== 'undefined') {
         window.location.href = '/dashboard/departments?highlight=Finance';
       }
@@ -303,7 +339,7 @@ export const VoiceProvider = ({ children }: { children: ReactNode }) => {
       return;
     }
 
-    if (textLower.includes('open task') || textLower.includes('show task') || textLower.includes('my tasks')) {
+    if ((isJarvis || isExplicitOpen) && (textLower.includes('open task') || textLower.includes('show task') || textLower.includes('my tasks'))) {
       if (typeof window !== 'undefined') {
         window.location.href = '/dashboard/tasks';
       }
@@ -315,7 +351,7 @@ export const VoiceProvider = ({ children }: { children: ReactNode }) => {
       return;
     }
 
-    if (textLower.includes('open boardroom') || textLower.includes('start meeting') || textLower.includes('boardroom')) {
+    if ((isJarvis || isExplicitOpen) && (textLower.includes('open boardroom') || textLower.includes('start meeting') || textLower.includes('boardroom'))) {
       if (typeof window !== 'undefined') {
         window.location.href = '/dashboard/meetings';
       }
@@ -327,7 +363,7 @@ export const VoiceProvider = ({ children }: { children: ReactNode }) => {
       return;
     }
 
-    if (textLower.includes('open marketing') || textLower.includes('show marketing') || textLower.includes('campaign')) {
+    if ((isJarvis || isExplicitOpen) && (textLower.includes('open marketing') || textLower.includes('show marketing') || textLower.includes('campaign'))) {
       if (typeof window !== 'undefined') {
         window.location.href = '/dashboard/marketing';
       }
@@ -339,7 +375,7 @@ export const VoiceProvider = ({ children }: { children: ReactNode }) => {
       return;
     }
 
-    if (textLower.includes('open brain') || textLower.includes('show memory') || textLower.includes('company brain')) {
+    if ((isJarvis || isExplicitOpen) && (textLower.includes('open brain') || textLower.includes('show memory') || textLower.includes('company brain'))) {
       if (typeof window !== 'undefined') {
         window.location.href = '/dashboard/brain';
       }
@@ -351,7 +387,7 @@ export const VoiceProvider = ({ children }: { children: ReactNode }) => {
       return;
     }
 
-    if (textLower.includes('open report') || textLower.includes('show report') || textLower.includes('reports')) {
+    if ((isJarvis || isExplicitOpen) && (textLower.includes('open report') || textLower.includes('show report') || textLower.includes('reports'))) {
       if (typeof window !== 'undefined') {
         window.location.href = '/dashboard/reports';
       }
@@ -399,7 +435,7 @@ export const VoiceProvider = ({ children }: { children: ReactNode }) => {
             const res = await fetch('/api/os/voice/session/turn', {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ sessionId: sId, text })
+              body: JSON.stringify({ sessionId: sId, text, employeeId: currentActiveEmployeeId })
             });
             if (res.ok) {
               const data = await res.json();
@@ -475,14 +511,16 @@ export const VoiceProvider = ({ children }: { children: ReactNode }) => {
   };
 
   const handleSpeechEnd = () => {
+    (window as any)._activeUtterance = null;
     activeUtteranceRef.current = null;
     if (handoverQueue) {
       startCall(handoverQueue.id, handoverQueue.name, handoverQueue.role);
       setHandoverTrigger(true);
       setHandoverQueue(null);
     } else if (voiceStateRef.current !== 'idle' && voiceStateRef.current !== 'paused') {
+      voiceStateRef.current = 'listening';
       setVoiceState('listening');
-      startListening();
+      setTimeout(() => startListening(), 80);
     }
   };
 
@@ -502,6 +540,8 @@ export const VoiceProvider = ({ children }: { children: ReactNode }) => {
 
       const utterance = new SpeechSynthesisUtterance(text);
       utterance.volume = volume;
+      utterance.rate = 1.18; // Fast, snappy default speaking rate
+      (window as any)._activeUtterance = utterance;
       activeUtteranceRef.current = utterance;
 
       const voices = availableVoicesRef.current.length > 0
@@ -510,12 +550,20 @@ export const VoiceProvider = ({ children }: { children: ReactNode }) => {
 
       if (voices.length > 0) {
         const dbProfile = (window as any)._activeVoiceProfile || {};
-        const isFemale = dbProfile.gender === 'Female' || activeEmployeeRole?.toLowerCase().includes('marketing') || activeEmployeeRole?.toLowerCase().includes('hr');
-        const isBritish = dbProfile.accent?.includes('British') || activeEmployeeName?.toLowerCase().includes('jarvis');
-        const isIndian = dbProfile.accent?.includes('Indian');
-        const isAustralian = dbProfile.accent?.includes('Australian');
+        const empNameLower = (activeEmployeeNameRef.current || activeEmployeeName || '').toLowerCase();
+        const empRoleLower = (activeEmployeeRoleRef.current || activeEmployeeRole || '').toLowerCase();
 
-        const englishVoices = voices.filter(v => v.lang.startsWith('en'));
+        const isIndian = dbProfile.isIndian || 
+                         dbProfile.accent?.includes('Indian') || 
+                         dbProfile.voiceId?.includes('en-IN') || 
+                         ['priya', 'rohan', 'anita', 'sharma', 'patel', 'roy'].some(n => empNameLower.includes(n));
+        const isFemale = dbProfile.gender === 'Female' || 
+                         ['priya', 'sarah', 'anita'].some(n => empNameLower.includes(n)) || 
+                         empRoleLower.includes('marketing') || 
+                         empRoleLower.includes('hr');
+        const isBritish = dbProfile.accent?.includes('British') || empNameLower.includes('jarvis');
+
+        const englishVoices = voices.filter(v => v.lang.startsWith('en') || v.lang.startsWith('hi'));
         const voicePool = englishVoices.length > 0 ? englishVoices : voices;
 
         let selectedVoice: SpeechSynthesisVoice | undefined = undefined;
@@ -524,14 +572,23 @@ export const VoiceProvider = ({ children }: { children: ReactNode }) => {
           selectedVoice = voices.find(v => v.voiceURI === dbProfile.voiceId || v.name === dbProfile.voiceId);
         }
 
+        if (!selectedVoice && isIndian) {
+          selectedVoice = voicePool.find(v => {
+            const isMatch = v.lang.includes('IN') || v.name.includes('India') || v.name.includes('Heera') || v.name.includes('Veena') || v.name.includes('Ravi');
+            if (isFemale) return isMatch && (v.name.includes('Female') || v.name.includes('Heera') || v.name.includes('Veena') || v.name.includes('Zira') || !v.name.includes('Male'));
+            return isMatch;
+          });
+        }
+
         if (!selectedVoice) {
           selectedVoice = voicePool.find(v => {
-            const matchesGender = isFemale ? (v.name.includes('Female') || v.name.includes('Girl') || v.name.includes('Zira')) : (v.name.includes('Male') || v.name.includes('Guy') || v.name.includes('David') || v.name.includes('George'));
+            const matchesGender = isFemale 
+              ? (v.name.includes('Female') || v.name.includes('Girl') || v.name.includes('Zira') || v.name.includes('Samantha') || v.name.includes('Victoria')) 
+              : (v.name.includes('Male') || v.name.includes('Guy') || v.name.includes('David') || v.name.includes('George') || v.name.includes('Alex'));
             let matchesAccent = true;
             if (isBritish) matchesAccent = v.lang.includes('GB');
             else if (isIndian) matchesAccent = v.lang.includes('IN');
-            else if (isAustralian) matchesAccent = v.lang.includes('AU');
-            else matchesAccent = v.lang.includes('US');
+            else matchesAccent = v.lang.includes('US') || v.lang.includes('en');
             return matchesGender && matchesAccent;
           });
         }
@@ -539,40 +596,40 @@ export const VoiceProvider = ({ children }: { children: ReactNode }) => {
         if (!selectedVoice) {
           selectedVoice = voicePool[0];
         }
+
         utterance.voice = selectedVoice;
         if (dbProfile.voicePitch) utterance.pitch = parseFloat(dbProfile.voicePitch);
-        if (dbProfile.voiceSpeed) utterance.rate = parseFloat(dbProfile.voiceSpeed);
+        const desiredRate = dbProfile.voiceSpeed ? parseFloat(dbProfile.voiceSpeed) : 1.18;
+        utterance.rate = Math.max(desiredRate, 1.15); // Fast, energetic and conversational
       }
 
       let isHandled = false;
+      const finish = () => {
+        if (isHandled) return;
+        isHandled = true;
+        (window as any)._activeUtterance = null;
+        activeUtteranceRef.current = null;
+        handleSpeechEnd();
+      };
 
       utterance.onstart = () => {
         setVoiceState('speaking');
       };
 
-      utterance.onend = () => {
-        if (isHandled) return;
-        isHandled = true;
-        activeUtteranceRef.current = null;
-        handleSpeechEnd();
-      };
+      utterance.onend = finish;
+      utterance.onerror = finish;
 
-      utterance.onerror = (e: any) => {
-        if (isHandled) return;
-        isHandled = true;
-        activeUtteranceRef.current = null;
-        handleSpeechEnd();
-      };
-
-      // Safety timeout in case browser speech engine blocks
+      // Watchdog timeout to prevent voice UI hanging if browser synthesis stops
+      const timeoutDuration = Math.min(Math.max(text.length * 60, 2500), 9000);
       setTimeout(() => {
-        if (!isHandled && voiceStateRef.current !== 'paused') {
-          isHandled = true;
-          activeUtteranceRef.current = null;
-          handleSpeechEnd();
+        if (!isHandled && voiceStateRef.current === 'speaking') {
+          finish();
         }
-      }, Math.max(text.length * 120, 3500));
+      }, timeoutDuration);
 
+      if (synthRef.current.paused) {
+        synthRef.current.resume();
+      }
       synthRef.current.speak(utterance);
     }, 60);
   };
@@ -581,19 +638,28 @@ export const VoiceProvider = ({ children }: { children: ReactNode }) => {
     setActiveEmployeeId(employeeId);
     setActiveEmployeeName(employeeName);
     setActiveEmployeeRole(employeeRole);
+    activeEmployeeIdRef.current = employeeId;
     setChatEndpoint(customEndpoint || null);
+    chatEndpointRef.current = customEndpoint || null;
     setHistory([]);
+    historyRef.current = [];
     setVoiceState('connecting');
+    voiceStateRef.current = 'connecting';
 
     // Fetch the employee's custom voice profile
     fetch(`/api/os/workforce/employee/${employeeId}`)
       .then(res => res.json())
       .then(data => {
         if (data.employee) {
+          const empNameLower = (data.employee.name || employeeName).toLowerCase();
+          const isIndian = data.employee.accent?.includes('Indian') || 
+                           data.employee.voiceId?.includes('en-IN') || 
+                           ['priya', 'rohan', 'anita', 'sharma', 'patel', 'roy'].some((n: string) => empNameLower.includes(n));
           (window as any)._activeVoiceProfile = {
             voiceId: data.employee.voiceId,
-            gender: data.employee.gender,
-            accent: data.employee.accent,
+            gender: data.employee.gender || (['priya', 'sarah', 'anita'].some((n: string) => empNameLower.includes(n)) ? 'Female' : 'Male'),
+            accent: isIndian ? 'Indian' : (data.employee.accent || 'US'),
+            isIndian,
             voiceSpeed: data.employee.voiceSpeed,
             voicePitch: data.employee.voicePitch
           };
@@ -606,6 +672,7 @@ export const VoiceProvider = ({ children }: { children: ReactNode }) => {
       try {
         if (customEndpoint) {
           if (skipGreeting) {
+            voiceStateRef.current = 'listening';
             setVoiceState('listening');
             startListening();
             return;
@@ -623,6 +690,7 @@ export const VoiceProvider = ({ children }: { children: ReactNode }) => {
             setHistory([{ role: 'assistant', content: responseText }]);
             speakText(responseText);
           } else {
+            voiceStateRef.current = 'listening';
             setVoiceState('listening');
             startListening();
           }
@@ -642,6 +710,7 @@ export const VoiceProvider = ({ children }: { children: ReactNode }) => {
               if (sessionData?.id) {
                 sId = sessionData.id;
                 setSessionId(sId);
+                sessionIdRef.current = sId;
               }
             }
           } catch (e) {
@@ -649,6 +718,7 @@ export const VoiceProvider = ({ children }: { children: ReactNode }) => {
           }
 
           if (skipGreeting) {
+            voiceStateRef.current = 'listening';
             setVoiceState('listening');
             startListening();
             return;
@@ -661,7 +731,7 @@ export const VoiceProvider = ({ children }: { children: ReactNode }) => {
               const turnRes = await fetch('/api/os/voice/session/turn', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ sessionId: sId, text: greetingMsg })
+                body: JSON.stringify({ sessionId: sId, text: greetingMsg, employeeId })
               });
               if (turnRes.ok) {
                 const turnData = await turnRes.json();
@@ -688,8 +758,8 @@ export const VoiceProvider = ({ children }: { children: ReactNode }) => {
           // Safe instant fallback
           if (!greetingText) {
             greetingText = employeeId.toLowerCase().includes('jarvis')
-              ? "Good day, CEO. Systems are fully operational and I am standing by for your directives."
-              : `Hello, CEO. ${employeeName} here, ready to assist you.`;
+              ? "Hello CEO! Systems are active and I am standing by for your directives."
+              : `Hello CEO! This is ${employeeName}, ${employeeRole}. How can I assist you right now?`;
           }
 
           setLastResponse(greetingText);
@@ -698,6 +768,7 @@ export const VoiceProvider = ({ children }: { children: ReactNode }) => {
         }
       } catch (e) {
         console.error('Call initialization error', e);
+        voiceStateRef.current = 'listening';
         setVoiceState('listening');
         startListening();
       }

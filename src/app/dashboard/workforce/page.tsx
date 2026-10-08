@@ -2,10 +2,12 @@
 
 import React, { useEffect, useState } from 'react';
 import { motion } from 'framer-motion';
-import { Users, UserPlus, Target, Award, BrainCircuit, Activity, ChevronRight, BarChart, Mic } from 'lucide-react';
+import { Users, UserPlus, Target, Award, BrainCircuit, Activity, ChevronRight, BarChart, Mic, PhoneCall } from 'lucide-react';
 import Link from 'next/link';
+import { useVoice } from '@/components/providers/VoiceProvider';
 
 export default function WorkforceHub() {
+  const { startCall, voiceState, activeEmployeeId } = useVoice();
   const [data, setData] = useState<any>(null);
   const [loading, setLoading] = useState(true);
 
@@ -123,25 +125,43 @@ export default function WorkforceHub() {
           </div>
           
           <div className="grid grid-cols-1 md:grid-cols-3 xl:grid-cols-4 gap-6">
-            {totalEmployees.map((emp: any, idx: number) => (
-              <Link key={emp.id ? `${emp.id}-${idx}` : `emp-${idx}`} href={`/dashboard/workforce/employees/${emp.id}`}>
-                <div className="bg-white border border-gray-200 rounded-3xl p-6 hover:shadow-md hover:border-gray-300 transition-all cursor-pointer group">
-                  <div className="flex items-center gap-4 mb-5">
-                    <div className="w-12 h-12 rounded-xl bg-gray-100 flex items-center justify-center border border-gray-200 group-hover:bg-indigo-50 transition-colors shadow-sm">
-                      <span className="font-bold text-gray-700 text-lg group-hover:text-indigo-600">{emp.name.charAt(0)}</span>
+            {totalEmployees.map((emp: any, idx: number) => {
+              const isCallingThisEmp = voiceState !== 'idle' && activeEmployeeId === emp.id;
+              return (
+                <div key={emp.id ? `${emp.id}-${idx}` : `emp-${idx}`} className="bg-white border border-gray-200 rounded-3xl p-6 hover:shadow-md hover:border-gray-300 transition-all flex flex-col justify-between group">
+                  <Link href={`/dashboard/workforce/employees/${emp.id}`} className="block">
+                    <div className="flex items-center gap-4 mb-5">
+                      <div className="w-12 h-12 rounded-xl bg-gray-100 flex items-center justify-center border border-gray-200 group-hover:bg-indigo-50 transition-colors shadow-sm">
+                        <span className="font-bold text-gray-700 text-lg group-hover:text-indigo-600">{emp.name?.charAt(0) || 'A'}</span>
+                      </div>
+                      <div>
+                        <h3 className="font-bold text-gray-900 text-base group-hover:text-indigo-600 transition-colors">{emp.name}</h3>
+                        <p className="text-xs text-gray-500 font-medium mt-0.5">{emp.role}</p>
+                      </div>
                     </div>
-                    <div>
-                      <h3 className="font-bold text-gray-900 text-base">{emp.name}</h3>
-                      <p className="text-xs text-gray-500 font-medium mt-0.5">{emp.role}</p>
-                    </div>
-                  </div>
-                  <div className="flex items-center justify-between text-xs font-bold">
+                  </Link>
+
+                  <div className="flex items-center justify-between text-xs font-bold pt-4 border-t border-gray-100">
                     <span className="text-emerald-700 bg-emerald-50 border border-emerald-200 px-2.5 py-1 rounded-full">Active</span>
-                    <span className="text-gray-500">v{emp.version}.0 Runtime</span>
+                    <button
+                      onClick={(e) => {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        startCall(emp.id, emp.name, emp.role);
+                      }}
+                      className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl font-bold transition-all shadow-sm ${
+                        isCallingThisEmp
+                          ? 'bg-red-50 text-red-600 border border-red-200'
+                          : 'bg-indigo-50 text-indigo-700 hover:bg-indigo-600 hover:text-white border border-indigo-100'
+                      }`}
+                    >
+                      <PhoneCall className="w-3.5 h-3.5" />
+                      <span>{isCallingThisEmp ? 'In Call' : 'Call Voice'}</span>
+                    </button>
                   </div>
                 </div>
-              </Link>
-            ))}
+              );
+            })}
             
             {totalEmployees.length === 0 && (
               <div className="col-span-full text-center p-16 bg-gray-50 border border-gray-200 border-dashed rounded-3xl">

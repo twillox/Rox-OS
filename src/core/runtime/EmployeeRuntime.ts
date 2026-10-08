@@ -11,6 +11,9 @@ export interface EmployeeConfig {
   department: string;
   personality: string;
   rules: string[];
+  skills?: string[];
+  responsibilities?: string;
+  decisionBoundaries?: string;
   knowledgeTags: string[];
   voiceId: string;
   businessId: string;
@@ -89,44 +92,60 @@ export class EmployeeRuntime {
 
   private async fetchDynamicContext(): Promise<string> {
     try {
-      const [analytics, tasks, knowledge, peers] = await Promise.all([
-        prisma.employeeAnalytics.findUnique({ where: { employeeId: this.config.id } }),
+      const [analytics, tasks, knowledge, allEmployees] = await Promise.all([
+        prisma.employeeAnalytics.findUnique({ where: { employeeId: this.config.id } }).catch(() => null),
         prisma.task.findMany({ 
           where: { employeeId: this.config.id, status: { in: ['PENDING', 'IN_PROGRESS'] } },
-          take: 5 
-        }),
+          take: 6 
+        }).catch(() => []),
         prisma.businessKnowledge.findMany({
-          where: { businessId: this.config.businessId, keywords: { hasSome: this.config.knowledgeTags } },
-          take: 3,
+          where: { businessId: this.config.businessId },
+          take: 4,
           orderBy: { createdAt: 'desc' }
-        }),
+        }).catch(() => []),
         prisma.employee.findMany({
-          where: { businessId: this.config.businessId, departmentId: this.config.department, id: { not: this.config.id } },
-          take: 3,
-          select: { name: true, role: true }
-        })
+          where: { businessId: this.config.businessId, id: { not: this.config.id } },
+          take: 12,
+          include: { department: true }
+        }).catch(() => [])
       ]);
 
       let contextStr = '';
+      if (allEmployees && allEmployees.length > 0) {
+        contextStr += `\nExecutive Colleague Directory (Refer tasks outside your domain to them):\n`;
+        allEmployees.forEach((p: any) => {
+          contextStr += `- ${p.name} (${p.role}) -> Department: ${p.department?.name || p.department || 'Operations'}\n`;
+        });
+      }
+
       if (analytics) {
-        contextStr += `\nPerformance Context: You have completed ${analytics.successfulGoals} out of ${analytics.totalConversations} missions.\n`;
+        contextStr += `\nPerformance Context: You have completed ${analytics.successfulGoals || 0} out of ${analytics.totalConversations || 0} missions.\n`;
       }
       
-      if (tasks.length > 0) {
-        contextStr += `\nCurrent Workload (Active Tasks):\n`;
-        tasks.forEach(t => contextStr += `- [${t.priority}] ${t.title}: ${t.description || ''}\n`);
+      if (tasks && tasks.length > 0) {
+        contextStr += `\nYour Current Active Tasks:\n`;
+        tasks.forEach((t: any) => contextStr += `- [${t.priority}] ${t.title}: ${t.description || ''}\n`);
       } else {
-        contextStr += `\nCurrent Workload: You currently have no active tasks and are available for assignment.\n`;
+        contextStr += `\nYour Workload: Standing by for domain directives from the CEO.\n`;
       }
 
-      if (knowledge.length > 0) {
-        contextStr += `\nRelevant Company Knowledge:\n`;
-        knowledge.forEach(k => contextStr += `- ${k.title}\n`);
+      if (knowledge && knowledge.length > 0) {
+        contextStr += `\nCompany Knowledge Base:\n`;
+        knowledge.forEach((k: any) => contextStr += `- ${k.title}: ${k.content || ''}\n`);
       }
 
-      if (peers.length > 0) {
-        contextStr += `\nYour Peers in ${this.config.department}:\n`;
-        peers.forEach(p => contextStr += `- ${p.name} (${p.role})\n`);
+      // Fetch Live Third-Party Connected Integrations (Gmail, Calendar, Drive, GitHub)
+      try {
+        const { cookies } = await import('next/headers');
+        const cookieStore = await cookies();
+        const userId = cookieStore.get('userId')?.value || cookieStore.get('businessId')?.value || 'default_user';
+        const { AgentIntegrationService } = await import('@/lib/services/AgentIntegrationService');
+        const liveIntegrations = await AgentIntegrationService.getLiveIntegrationsContext(userId, this.config.businessId);
+        if (liveIntegrations.connectedProviders.length > 0) {
+          contextStr += `\n============================================================\nLIVE CONNECTED APPS & INTEGRATIONS (${liveIntegrations.connectedProviders.join(', ')}):\n${liveIntegrations.formattedText}\n============================================================\n`;
+        }
+      } catch (intErr) {
+        // Ignored if outside request context
       }
 
       return contextStr;
@@ -137,36 +156,56 @@ export class EmployeeRuntime {
 
   public async buildSystemPrompt(): Promise<string> {
     const dynamicContext = await this.fetchDynamicContext();
-    const style = this.config.speakingStyle || "natural and concise";
+    const style = this.config.speakingStyle || "natural, simple, and concise";
     const mood = this.config.mood || "neutral";
+    const skillsList = (this.config.skills && this.config.skills.length > 0)
+      ? this.config.skills.join(', ')
+      : this.config.role;
+    const responsibilities = this.config.responsibilities || `Lead and execute ${this.config.role} initiatives within ${this.config.department}.`;
 
     return `
-You are ${this.config.name}, a real ${this.config.role} in the ${this.config.department} department.
+You are ${this.config.name}, the ${this.config.role} of the company in the ${this.config.department} department.
+Your assigned jurisdiction and specialization: ${skillsList}.
+Your core responsibilities: ${responsibilities}.
 Your personality: ${this.config.personality}
 Your speaking style: ${style}
 Your current mood: ${mood}
 
-CRITICAL CONVERSATION RULES:
-1. You are NOT an AI chatbot. You are a living executive colleague on a voice call with the CEO.
-2. NEVER use chatbot compliance phrases ("As an AI...", "Certainly", "I can help with that", "Based on the information").
-3. Do not force every response to end with a question. Continue the conversation naturally based on context.
-4. Occasionally "think aloud" naturally before jumping to a conclusion (e.g., "Give me a second to look at that... alright, here's what we have."), but do not hardcode fillers ("Hmm", "Actually") unless contextually appropriate.
-5. EMBRACE YOUR DEPARTMENT ROLE (Pacing, Vocabulary, Delivery):
-   - If Finance: Speak calmly, logically, and directly. Think in numbers. Challenge spending aggressively.
-   - If Marketing: Speak energetically, creatively, and optimistically. Focus on customers and acquisition.
-   - If Engineering: Speak analytically and precisely. Raise technical realities and risks.
-   - If HR: Speak warmly and supportively. Focus on relationships and burnout.
-   - If Legal: Speak firmly. Raise compliance and regulatory concerns immediately.
-6. GENUINELY DISAGREE and ask clarifying questions if ideas conflict with your domain. Do not blindly comply.
-7. Keep your spoken responses concise (1-3 sentences default) unless giving a requested detailed report, but always sound fluid and human.
-8. SPEAKING TONE & INDIAN ENGLISH: Speak in a very natural, friendly, human tone using simple, everyday Indian English phrasing (e.g., "Yes sure, let me check that for you right away...", "Alright, here is what we are seeing in the numbers...", "No problem at all!"). NEVER use complicated high-level corporate jargon or robotic vocabulary. Speak like an intelligent, grounded colleague speaking to their CEO.
+============================================================
+STRICT ROLE ENFORCEMENT & DOMAIN BOUNDARIES (ABSOLUTE MANDATE):
+============================================================
+1. YOU ARE NOT A GENERAL AI ASSISTANT OR CHATBOT. You are exclusively ${this.config.name}, working as the ${this.config.role}.
+2. YOU MUST ONLY PERFORM WORK, ANSWER QUESTIONS, AND TAKE ACTIONS THAT FALL DIRECTLY WITHIN YOUR ASSIGNED ROLE (${this.config.role}) AND DEPARTMENT (${this.config.department}).
+3. YOU ARE STRICTLY FORBIDDEN FROM ANSWERING OR EXECUTING TASKS BELONGING TO OTHER DEPARTMENTS OR ROLES:
+   - If you are Finance (e.g. Priya Sharma): You ONLY handle numbers, cash flow, revenue, expenses, burn rate, runway, budgets, invoices, and treasury. If the CEO asks you to write code, design software architecture, launch ad campaigns, hire staff, or make sales pitches, POLITELY DECLINE AND HOLD YOUR BOUNDARY. Refer them to David Kim (Engineering), Sarah Jenkins (Marketing), Anita Roy (HR), or Alex Vance (Sales).
+   - If you are Engineering / CTO (e.g. David Kim): You ONLY handle software architecture, tech stack, APIs, infrastructure, latency, performance, security, and engineering. If the CEO asks for financial figures, marketing ad copy, HR issues, or sales contracts, POLITELY DECLINE. Refer them to Priya Sharma (Finance), Sarah Jenkins (Marketing), or the proper lead.
+   - If you are Marketing (e.g. Sarah Jenkins): You ONLY handle growth, campaigns, brand, CAC, SEO, content, and customer acquisition. If asked about server bugs, payroll, or code, POLITELY DECLINE.
+   - If you are Product & Strategy (e.g. Rohan Patel): You ONLY handle product roadmap, UX, feature prioritization, specifications, and operational workflows. If asked about tax filings or code bugs, DECLINE and refer to Finance or Engineering.
+    - If you are an Appointment Setter, Appointment Clerk, or Executive Assistant (e.g. Jessica Taylor): Your primary duty and core role is to qualify leads, book appointments, and schedule meetings directly on Google Calendar. When the CEO asks you to book a meeting or schedule a date/time (e.g., "book an appointment tomorrow at 3pm"), you extract the title, date, start time, end time, and attendees, output them in "appointmentsToBook", and confirm the booking clearly.
+    - If you are an Email / Communication specialist (or if asked about emails): Read recent emails from the live Gmail context. If asked what the recent email is, summarize it directly. If asked to reply, output "emailToSend" or confirm the reply.
+    - If you are HR & Talent (e.g. Anita Roy): You ONLY handle people, hiring, onboarding, culture, team alignment, and performance reviews. If asked about tech architecture or revenue models, DECLINE.
+4. HOW TO DECLINE OUT-OF-BOUNDS REQUESTS:
+   - Speak naturally and politely in simple, conversational phrasing:
+     "As the ${this.config.role}, that is outside my domain. Please check with [Colleague Name] in [Department] for that — they handle it directly."
+   - Set the JSON "handoverTo" or "taskDelegations" field to route the task to the correct department.
+   - NEVER pretend you can do everything. True executives have boundaries.
 
-Core Rules:
-${this.config.rules.map(r => '- ' + r).join('\n')}
+SPEAKING STYLE & TONE (HUMAN & INDIAN ENGLISH):
+- Speak like a real, intelligent human colleague in live conversation.
+- Use simple, natural Indian English phrasing when applicable (e.g. "Yes sure, let me check that for you right away...", "All set, I've booked that for you...", "No problem at all!").
+- Keep spoken responses concise and punchy (1-2 short natural spoken sentences).
+- Speak fast, clearly, and enthusiastically without robotic cliches or hesitations.
 
-Active Memory Context:
-${Object.entries(this.memory).map(([k, v]) => `${k}: ${v}`).join('\n')}
+YOUR ROLE-SPECIFIC RULES:
+${(this.config.rules || []).map(r => '- ' + r).join('\n')}
+${this.config.decisionBoundaries ? `- Decision Boundaries: ${this.config.decisionBoundaries}` : ''}
+
+CURRENT SYSTEM TIMESTAMP: ${new Date().toISOString()} (${new Date().toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}).
+
 ${dynamicContext}
+
+ACTIVE COMPANY & RECENT CONTEXT:
+${Object.entries(this.memory).map(([k, v]) => `${k}: ${v}`).join('\n')}
     `.trim();
   }
 
@@ -191,7 +230,9 @@ You MUST respond with a valid JSON object matching this exact structure:
   "moodShift": "Your new emotional state",
   "tasksToCreate": [{ "title": "Actionable Task Title", "description": "Brief description" }] | [],
   "taskDelegations": [{ "department": "Department Name (e.g., Marketing, Engineering)", "title": "Task Title", "description": "Brief description" }] | [],
-  "appointmentsToBook": [{ "title": "Meeting Title", "date": "Date/Time string", "attendees": ["email or name"] }] | [],
+  "appointmentsToBook": [{ "title": "Meeting Title", "date": "Date string", "startTime": "ISO 8601 string e.g. 2026-10-09T14:00:00Z", "endTime": "ISO 8601 string e.g. 2026-10-09T15:00:00Z", "attendees": ["email@example.com"] }] | [],
+  "reportToGenerate": { "title": "Report Title", "summary": "Detailed summary to display on dashboard" } | null,
+  "emailToSend": { "to": "email@example.com", "subject": "Subject line", "body": "Body of email" } | null,
   "handoverTo": "Optional exact department name (e.g., 'Engineering') if you want them to speak next in this meeting" | null,
   "response": "Your actual verbal response to the CEO (concise, spoken)."
 }
@@ -268,19 +309,70 @@ Do NOT include markdown formatting or backticks. Return RAW JSON.
         }
       }
 
-      // Initiative: Book Appointments
+      // Initiative: Book Appointments on Google Calendar
       if (parsed.appointmentsToBook && Array.isArray(parsed.appointmentsToBook) && parsed.appointmentsToBook.length > 0) {
         for (const apt of parsed.appointmentsToBook) {
           if (apt.title) {
+            let calendarSynced = false;
+            let syncNote = '';
+
+            try {
+              const { GoogleCalendarService } = await import('@/lib/integrations/services/GoogleCalendarService');
+              const { cookies } = await import('next/headers');
+              const cookieStore = await cookies();
+              const userId = cookieStore.get('userId')?.value || cookieStore.get('businessId')?.value || 'default_user';
+
+              // Parse startTime and endTime safely
+              let startIso: string;
+              if (apt.startTime && !isNaN(Date.parse(apt.startTime))) {
+                startIso = new Date(apt.startTime).toISOString();
+              } else if (apt.date && !isNaN(Date.parse(apt.date))) {
+                startIso = new Date(apt.date).toISOString();
+              } else {
+                const nextDay = new Date();
+                nextDay.setDate(nextDay.getDate() + 1);
+                nextDay.setHours(14, 0, 0, 0);
+                startIso = nextDay.toISOString();
+              }
+
+              let endIso: string;
+              if (apt.endTime && !isNaN(Date.parse(apt.endTime))) {
+                endIso = new Date(apt.endTime).toISOString();
+              } else {
+                endIso = new Date(new Date(startIso).getTime() + 60 * 60 * 1000).toISOString();
+              }
+
+              const attendees = Array.isArray(apt.attendees)
+                ? apt.attendees.filter((a: string) => typeof a === 'string' && a.includes('@'))
+                : [];
+
+              const created = await GoogleCalendarService.createEvent(userId, {
+                title: apt.title,
+                startTime: startIso,
+                endTime: endIso,
+                attendees,
+                description: `Scheduled by ${this.config.name} (${this.config.role}) via ROXTEN OS. Original date request: ${apt.date || 'Specified'}`,
+              });
+
+              if (created && created.id) {
+                calendarSynced = true;
+                syncNote = ` (Synced to Google Calendar - ID: ${created.id})`;
+                console.log(`[Google Calendar] Successfully booked event '${apt.title}' at ${startIso}`);
+              }
+            } catch (calErr: any) {
+              console.warn('[EmployeeRuntime] Google Calendar sync note:', calErr.message);
+              syncNote = ` (Calendar sync note: ${calErr.message})`;
+            }
+
             // Treat an appointment as a Task to ensure it tracks in the generic system
             await prisma.task.create({
               data: {
                 businessId: this.config.businessId,
                 employeeId: this.config.id, 
                 title: `Appointment: ${apt.title}`,
-                description: `Date: ${apt.date || 'TBD'}\nAttendees: ${(apt.attendees || []).join(', ')}`,
+                description: `Date: ${apt.date || 'TBD'}\nAttendees: ${(apt.attendees || []).join(', ')}${syncNote}`,
                 priority: 'HIGH',
-                status: 'PENDING',
+                status: calendarSynced ? 'DONE' : 'PENDING',
                 requiresApproval: false,
                 updatedAt: new Date()
               }
@@ -290,14 +382,73 @@ Do NOT include markdown formatting or backticks. Return RAW JSON.
               eventType: 'APPOINTMENT_BOOKED',
               module: 'WORKFORCE',
               title: `${this.config.name} Booked an Appointment`,
-              description: `Scheduled: ${apt.title} for ${apt.date || 'TBD'}`,
+              description: `Scheduled: ${apt.title} for ${apt.date || 'TBD'}${calendarSynced ? ' on Google Calendar' : ''}`,
               actor: this.config.name,
               targetEntity: 'Task',
               relatedEmployeeId: this.config.id,
               severity: 'INFO'
             });
-            await this.logToDesk(`Appointment Booked`, `${apt.title} on ${apt.date || 'TBD'}`);
+            await this.logToDesk(`Appointment Booked`, `${apt.title} on ${apt.date || 'TBD'}${calendarSynced ? ' [Synced to Google Calendar]' : ''}`);
           }
+        }
+      }
+
+      // Initiative: Generate Dashboard Executive Report
+      if (parsed.reportToGenerate && parsed.reportToGenerate.title && parsed.reportToGenerate.summary) {
+        try {
+          const { AgentIntegrationService } = await import('@/lib/services/AgentIntegrationService');
+          await AgentIntegrationService.publishDashboardReport(
+            this.config.businessId,
+            parsed.reportToGenerate.title,
+            parsed.reportToGenerate.summary,
+            {},
+            this.config.name
+          );
+        } catch (repErr) {
+          console.warn('Could not publish report from EmployeeRuntime:', repErr);
+        }
+      }
+
+      // Initiative: Send or Reply to Email
+      if (parsed.emailToSend && parsed.emailToSend.to && parsed.emailToSend.body) {
+        try {
+          const { GmailService } = await import('@/lib/integrations/services/GmailService');
+          const { cookies } = await import('next/headers');
+          const cookieStore = await cookies();
+          const userId = cookieStore.get('userId')?.value || cookieStore.get('businessId')?.value || 'default_user';
+          await GmailService.sendEmail(userId, {
+            to: parsed.emailToSend.to,
+            subject: parsed.emailToSend.subject || 'Re: Message',
+            body: parsed.emailToSend.body,
+          });
+          await EventService.publish({
+            businessId: this.config.businessId,
+            eventType: 'REPORT_GENERATED' as any,
+            module: 'INTELLIGENCE' as any,
+            title: `${this.config.name} Sent Email`,
+            description: `Sent email to ${parsed.emailToSend.to}: ${parsed.emailToSend.subject}`,
+            actor: this.config.name,
+            targetEntity: 'Email',
+            severity: 'INFO',
+          });
+        } catch (mailErr: any) {
+          console.warn('Could not send email from EmployeeRuntime:', mailErr.message);
+        }
+      } else if (
+        (input.toLowerCase().includes('reply') && (input.toLowerCase().includes('email') || input.toLowerCase().includes('mail'))) ||
+        input.toLowerCase().includes('not available')
+      ) {
+        try {
+          const { AgentIntegrationService } = await import('@/lib/services/AgentIntegrationService');
+          const { cookies } = await import('next/headers');
+          const cookieStore = await cookies();
+          const userId = cookieStore.get('userId')?.value || cookieStore.get('businessId')?.value || 'default_user';
+          await AgentIntegrationService.replyToLatestEmail(
+            userId,
+            'Hi, thank you for your email. I am currently not available right now. I will get back to you as soon as possible. Regards.'
+          );
+        } catch (repErr: any) {
+          console.warn('Could not auto-reply from EmployeeRuntime:', repErr.message);
         }
       }
 

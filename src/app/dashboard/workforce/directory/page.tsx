@@ -2,11 +2,13 @@
 
 import React, { useEffect, useState } from 'react';
 import { motion } from 'framer-motion';
-import { Users, Bot, Briefcase, Search, Filter, Activity, Brain, Volume2, Database, Clock } from 'lucide-react';
+import { Users, Bot, Briefcase, Search, Filter, Activity, Brain, Volume2, Database, Clock, PhoneCall } from 'lucide-react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
+import { useVoice } from '@/components/providers/VoiceProvider';
 
 export default function WorkforceDirectory() {
+  const { startCall, voiceState, activeEmployeeId } = useVoice();
   const [data, setData] = useState<any>(null);
   const [loading, setLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState('');
@@ -157,11 +159,23 @@ export default function WorkforceDirectory() {
                     </span>
                     <span className="text-indigo-600 font-bold truncate max-w-[150px]">{currentTask}</span>
                   </div>
-                  <div className="flex justify-between items-center text-sm">
-                    <span className="text-gray-500 font-semibold flex items-center gap-2">
-                      <Clock className="w-4 h-4" /> Last Active
-                    </span>
-                    <span className="text-gray-900 font-bold">Just now</span>
+                  <div className="flex justify-between items-center text-sm pt-2 border-t border-gray-50">
+                    <span className="text-gray-400 font-medium text-xs">Direct Voice Line</span>
+                    <button
+                      onClick={(e) => {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        startCall(emp.id, emp.name, emp.role);
+                      }}
+                      className={`flex items-center gap-2 px-3.5 py-1.5 rounded-xl font-bold text-xs transition-all shadow-sm ${
+                        voiceState !== 'idle' && activeEmployeeId === emp.id
+                          ? 'bg-red-50 text-red-600 border border-red-200'
+                          : 'bg-indigo-50 text-indigo-700 hover:bg-indigo-600 hover:text-white border border-indigo-100'
+                      }`}
+                    >
+                      <PhoneCall className="w-3.5 h-3.5" />
+                      <span>{voiceState !== 'idle' && activeEmployeeId === emp.id ? 'In Call' : 'Call Voice'}</span>
+                    </button>
                   </div>
                 </div>
               </div>

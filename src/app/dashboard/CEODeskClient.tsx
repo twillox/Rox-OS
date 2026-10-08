@@ -91,7 +91,9 @@ export default function CEODeskClient() {
       return;
     }
 
-    if (textLower.includes('boardroom') || textLower.includes('meeting') || textLower.includes('discuss')) {
+    const isBoardroomNav = (textLower.includes('boardroom') || textLower === 'meetings' || textLower === 'meeting' || textLower.startsWith('open boardroom') || textLower.startsWith('go to boardroom')) &&
+      !textLower.includes('book') && !textLower.includes('schedule') && !textLower.includes('calendar') && !textLower.includes('appointment') && !textLower.includes('tomorrow') && !textLower.includes('call');
+    if (isBoardroomNav) {
       setProcessingSteps([
         { msg: 'Connecting to Executive Boardroom...', status: 'done' }
       ]);
@@ -151,9 +153,10 @@ export default function CEODeskClient() {
       return;
     }
 
-    if (textLower.includes('report') || textLower.includes('summary')) {
+    const isExplicitReportNav = textLower.startsWith('open report') || textLower.startsWith('view report') || textLower.startsWith('go to report') || textLower === 'reports';
+    if (isExplicitReportNav) {
       setProcessingSteps([
-        { msg: 'Generating Executive Reports...', status: 'done' }
+        { msg: 'Opening Executive Reports...', status: 'done' }
       ]);
       await dispatchCommand(input);
       router.push('/dashboard/reports');

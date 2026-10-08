@@ -1,60 +1,135 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, Suspense } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Search, Filter, RefreshCw, Plus, CheckCircle, AlertCircle, Loader2, Workflow, ArrowRight, Settings2, FileText, Zap } from 'lucide-react';
+import { Search, Filter, RefreshCw, Plus, CheckCircle, AlertCircle, Loader2, Workflow, ArrowRight, Settings2, ShieldCheck, X } from 'lucide-react';
 import Link from 'next/link';
+import { useSearchParams, useRouter } from 'next/navigation';
 import { MOCK_INTEGRATIONS, Integration, ConnectionStatus, IntegrationCategory } from '@/lib/mock/integrations/data';
 
-export default function IntegrationsDashboard() {
-  const [integrations, setIntegrations] = useState<Integration[]>([]);
+const OAUTH_SUPPORTED_PROVIDERS = new Set([
+  'gmail',
+  'google-calendar',
+  'google-drive',
+  'github',
+  'slack',
+  'notion',
+  'linkedin'
+]);
+
+function IntegrationsContent() {
+  const router = useRouter();
+  const searchParams = useSearchParams();
+
+  const [integrations, setIntegrations] = useState<Integration[]>(MOCK_INTEGRATIONS);
+  const [loading, setLoading] = useState<boolean>(true);
   const [searchQuery, setSearchQuery] = useState('');
   const [activeCategory, setActiveCategory] = useState<IntegrationCategory | 'All'>('All');
   const [statusFilter, setStatusFilter] = useState<ConnectionStatus | 'All'>('All');
   
-  // Modal State
-  const [selectedIntegration, setSelectedIntegration] = useState<Integration | null>(null);
-  const [connectionStep, setConnectionStep] = useState<0|1|2|3|4|5>(0); // 0=closed, 1=prep, 2=perms, 3=oauth, 4=sync, 5=success
+  // Notification / Alert banners
+  const [alertInfo, setAlertInfo] = useState<{ type: 'success' | 'error' | 'info'; message: string } | null>(null);
+  const [disconnectingId, setDisconnectingId] = useState<string | null>(null);
+
+  // Load real backend statuses
+  const loadLiveStatuses = async () => {
+    try {
+      setLoading(true);
+      const res = await fetch('/api/integrations/status', { cache: 'no-store' });
+      if (!res.ok) throw new Error('Failed to load status');
+      const data = await res.json();
+      const liveStatuses: Record<string, any> = data.integrations || {};
+
+      setIntegrations(prev => {
+        return MOCK_INTEGRATIONS.map(item => {
+          const live = liveStatuses[item.id];
+          if (live && live.status === 'Connected') {
+            return {
+              ...item,
+              status: 'Connected' as ConnectionStatus,
+              lastActivity: live.providerAccountName ? `Account: ${live.providerAccountName}` : 'Connected',
+            };
+          } else if (live && live.status === 'Error') {
+            return {
+              ...item,
+              status: 'Error' as ConnectionStatus,
+              lastActivity: 'Authentication expired',
+            };
+          } else {
+            // Priority integrations default to Disconnected; others keep their preset
+            return {
+              ...item,
+              status: item.status === 'Coming Soon' ? 'Coming Soon' : 'Disconnected',
+              lastActivity: undefined,
+            };
+          }
+        });
+      });
+    } catch (err) {
+      console.error('Error fetching integration statuses:', err);
+    } finally {
+      setLoading(false);
+    }
+  };
 
   useEffect(() => {
-    // Load state from local storage or use defaults
-    const saved = localStorage.getItem('roxten_integrations');
-    if (saved) {
-      setIntegrations(JSON.parse(saved));
-    } else {
-      setIntegrations(MOCK_INTEGRATIONS);
-    }
-  }, []);
+    loadLiveStatuses();
 
-  const saveIntegrations = (newIntegrations: Integration[]) => {
-    setIntegrations(newIntegrations);
-    localStorage.setItem('roxten_integrations', JSON.stringify(newIntegrations));
-  };
+    // Check query params for OAuth result
+    const connectedParam = searchParams.get('connected');
+    const errorParam = searchParams.get('error');
+
+    if (connectedParam) {
+      const matched = MOCK_INTEGRATIONS.find(i => i.id === connectedParam);
+      const name = matched ? matched.name : connectedParam;
+      setAlertInfo({
+        type: 'success',
+        message: `Successfully connected ${name}! Credentials securely stored with AES-256 encryption.`,
+      });
+    } else if (errorParam) {
+      setAlertInfo({
+        type: 'error',
+        message: errorParam,
+      });
+    }
+  }, [searchParams]);
 
   const handleConnectClick = (integration: Integration) => {
-    setSelectedIntegration(integration);
-    setConnectionStep(1);
-    
-    // Step 1: Preparing Integration
-    setTimeout(() => setConnectionStep(2), 1500);
-    // Step 2: Checking Permissions
-    setTimeout(() => setConnectionStep(3), 3000);
-    // Step 3 waits for user to click Approve
+    if (OAUTH_SUPPORTED_PROVIDERS.has(integration.id)) {
+      // Redirect to real OAuth flow
+      window.location.href = `/api/integrations/${integration.id}/connect`;
+    } else {
+      setAlertInfo({
+        type: 'info',
+        message: `${integration.name} integration is coming soon.`,
+      });
+    }
   };
 
-  const handleOAuthApprove = () => {
-    setConnectionStep(4); // Sync
-    setTimeout(() => {
-      setConnectionStep(5); // Success
-      
-      // Update local storage
-      const updated = integrations.map(i => 
-        i.id === selectedIntegration?.id 
-          ? { ...i, status: 'Connected' as ConnectionStatus, lastActivity: 'Just now' }
-          : i
-      );
-      saveIntegrations(updated);
-    }, 2500);
+  const handleDisconnectClick = async (integrationId: string) => {
+    const confirmed = window.confirm(`Are you sure you want to disconnect this integration?`);
+    if (!confirmed) return;
+
+    try {
+      setDisconnectingId(integrationId);
+      const res = await fetch(`/api/integrations/${integrationId}/disconnect`, {
+        method: 'POST',
+      });
+      if (!res.ok) throw new Error('Failed to disconnect');
+
+      setAlertInfo({
+        type: 'info',
+        message: `Integration has been disconnected and encrypted credentials cleared.`,
+      });
+      await loadLiveStatuses();
+    } catch (err: any) {
+      setAlertInfo({
+        type: 'error',
+        message: err.message || 'Disconnect failed',
+      });
+    } finally {
+      setDisconnectingId(null);
+    }
   };
 
   const categories = ['All', ...Array.from(new Set(MOCK_INTEGRATIONS.map(i => i.category)))];
@@ -69,13 +144,53 @@ export default function IntegrationsDashboard() {
 
   return (
     <div className="flex flex-col h-full bg-[#fbfbfe] overflow-hidden text-gray-900 font-sans">
-      {/* Prototype Banner */}
-      <div className="bg-indigo-600/10 border-b border-indigo-200 p-3 flex items-center justify-center gap-3 shrink-0">
-        <Zap className="w-4 h-4 text-indigo-600" />
-        <p className="text-sm font-medium text-indigo-900">
-          <strong className="font-bold">Prototype Mode:</strong> This module demonstrates complete integration workflows using simulated services. The architecture is production-ready.
-        </p>
+      {/* Real OAuth 2.0 Security Banner */}
+      <div className="bg-emerald-600/10 border-b border-emerald-200 p-3 flex items-center justify-between px-6 shrink-0">
+        <div className="flex items-center gap-3">
+          <ShieldCheck className="w-4 h-4 text-emerald-600 shrink-0" />
+          <p className="text-sm font-medium text-emerald-950">
+            <strong className="font-bold">Production OAuth 2.0:</strong> Integrations utilize server-side OAuth with AES-256-GCM encrypted token vaults. Real token exchange and live API sync active.
+          </p>
+        </div>
+        <button 
+          onClick={loadLiveStatuses} 
+          disabled={loading}
+          className="text-xs font-semibold text-emerald-800 hover:text-emerald-950 flex items-center gap-1.5 transition"
+        >
+          <RefreshCw className={`w-3.5 h-3.5 ${loading ? 'animate-spin' : ''}`} /> Refresh Status
+        </button>
       </div>
+
+      {/* Floating Alert */}
+      <AnimatePresence>
+        {alertInfo && (
+          <motion.div 
+            initial={{ opacity: 0, y: -10 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -10 }}
+            className={`mx-8 mt-4 p-4 rounded-2xl flex items-center justify-between shadow-sm border ${
+              alertInfo.type === 'success' 
+                ? 'bg-emerald-50 border-emerald-200 text-emerald-900' 
+                : alertInfo.type === 'error'
+                ? 'bg-rose-50 border-rose-200 text-rose-900'
+                : 'bg-indigo-50 border-indigo-200 text-indigo-900'
+            }`}
+          >
+            <div className="flex items-center gap-3">
+              {alertInfo.type === 'success' && <CheckCircle className="w-5 h-5 text-emerald-600 shrink-0" />}
+              {alertInfo.type === 'error' && <AlertCircle className="w-5 h-5 text-rose-600 shrink-0" />}
+              {alertInfo.type === 'info' && <ShieldCheck className="w-5 h-5 text-indigo-600 shrink-0" />}
+              <span className="text-sm font-medium">{alertInfo.message}</span>
+            </div>
+            <button 
+              onClick={() => setAlertInfo(null)}
+              className="p-1 hover:bg-black/5 rounded-lg transition"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       <div className="flex-1 overflow-y-auto custom-scrollbar p-8">
         <div className="max-w-7xl mx-auto space-y-8">
@@ -84,7 +199,7 @@ export default function IntegrationsDashboard() {
           <div className="flex flex-col md:flex-row md:items-end justify-between gap-6">
             <div>
               <h1 className="text-4xl font-extrabold tracking-tight text-gray-900 mb-2">Integrations Hub</h1>
-              <p className="text-lg text-gray-500">Connect Roxten OS to your favorite tools and let AI orchestrate your workflows.</p>
+              <p className="text-lg text-gray-500">Connect Roxten OS to your external accounts with authenticated OAuth 2.0 pipelines.</p>
             </div>
             <div className="flex items-center gap-3">
               <Link href="/dashboard/integrations/analytics" className="px-4 py-2 bg-white border border-gray-200 text-gray-700 rounded-xl text-sm font-semibold hover:bg-gray-50 transition shadow-sm flex items-center gap-2">
@@ -142,250 +257,127 @@ export default function IntegrationsDashboard() {
             </div>
           ) : (
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
-              {filteredIntegrations.map((integration, index) => (
-                <motion.div
-                  key={integration.id}
-                  initial={{ opacity: 0, y: 20 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  transition={{ duration: 0.3, delay: index * 0.05 }}
-                  className="bg-white rounded-3xl p-6 border border-gray-100 shadow-[0_2px_10px_rgba(0,0,0,0.02)] hover:shadow-xl hover:-translate-y-1 transition-all duration-300 flex flex-col group relative overflow-hidden"
-                >
-                  {/* Background Accents */}
-                  <div className="absolute top-0 right-0 p-3 opacity-0 group-hover:opacity-100 transition-opacity">
-                    <span className="text-[10px] font-bold uppercase tracking-widest text-indigo-600 bg-indigo-50 px-2 py-1 rounded-md">Demo Ready</span>
-                  </div>
+              {filteredIntegrations.map((integration, index) => {
+                const isOAuthReady = OAUTH_SUPPORTED_PROVIDERS.has(integration.id);
+                const isDisconnecting = disconnectingId === integration.id;
 
-                  <div className="flex items-start justify-between mb-4">
-                    <div className="w-12 h-12 rounded-2xl bg-gray-50 flex items-center justify-center border border-gray-100 shrink-0 group-hover:scale-110 transition-transform duration-300">
-                      {integration.logoUrl ? (
-                        <img src={integration.logoUrl} alt={integration.name} className="w-7 h-7 object-contain" />
-                      ) : (
-                        <Workflow className="w-6 h-6 text-gray-400" />
-                      )}
-                    </div>
-                  </div>
-
-                  <h3 className="text-lg font-bold text-gray-900 mb-1">{integration.name}</h3>
-                  <p className="text-sm text-gray-500 mb-6 flex-1 line-clamp-2">{integration.description}</p>
-
-                  <div className="flex items-center justify-between mt-auto">
-                    <div className="flex items-center gap-2">
-                      {integration.status === 'Connected' && <div className="w-2 h-2 rounded-full bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.6)] animate-pulse" />}
-                      {integration.status === 'Disconnected' && <div className="w-2 h-2 rounded-full bg-gray-300" />}
-                      {integration.status === 'Coming Soon' && <div className="w-2 h-2 rounded-full bg-blue-400" />}
-                      {integration.status === 'Syncing' && <div className="w-2 h-2 rounded-full bg-amber-500 animate-bounce" />}
-                      {integration.status === 'Error' && <div className="w-2 h-2 rounded-full bg-red-500 animate-pulse" />}
-                      <span className={`text-xs font-bold uppercase tracking-wide
-                        ${integration.status === 'Connected' ? 'text-emerald-700' : ''}
-                        ${integration.status === 'Disconnected' ? 'text-gray-500' : ''}
-                        ${integration.status === 'Coming Soon' ? 'text-blue-600' : ''}
-                        ${integration.status === 'Syncing' ? 'text-amber-600' : ''}
-                        ${integration.status === 'Error' ? 'text-red-600' : ''}
-                      `}>
-                        {integration.status}
-                      </span>
-                    </div>
-
-                    <div className="flex items-center gap-1">
+                return (
+                  <motion.div
+                    key={integration.id}
+                    initial={{ opacity: 0, y: 20 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    transition={{ duration: 0.3, delay: index * 0.05 }}
+                    className="bg-white rounded-3xl p-6 border border-gray-100 shadow-[0_2px_10px_rgba(0,0,0,0.02)] hover:shadow-xl hover:-translate-y-1 transition-all duration-300 flex flex-col group relative overflow-hidden"
+                  >
+                    {/* Badge */}
+                    <div className="absolute top-0 right-0 p-3">
                       {integration.status === 'Connected' ? (
-                        <>
-                          <Link 
-                            href={`/dashboard/integrations/${integration.id}/settings`}
-                            className="p-2 text-gray-400 hover:text-gray-900 hover:bg-gray-100 rounded-lg transition"
-                          >
-                            <Settings2 className="w-4 h-4" />
-                          </Link>
-                          <Link 
-                            href={`/dashboard/integrations/${integration.id}`}
-                            className="px-3 py-1.5 bg-gray-900 text-white text-xs font-bold rounded-lg hover:bg-black transition flex items-center gap-1"
-                          >
-                            Open <ArrowRight className="w-3 h-3" />
-                          </Link>
-                        </>
-                      ) : integration.status === 'Coming Soon' ? (
-                         <button disabled className="px-4 py-1.5 bg-gray-100 text-gray-400 text-xs font-bold rounded-lg cursor-not-allowed">
-                          Soon
-                        </button>
+                        <span className="text-[10px] font-bold uppercase tracking-wider text-emerald-700 bg-emerald-50 px-2 py-1 rounded-md">
+                          Live Active
+                        </span>
+                      ) : isOAuthReady ? (
+                        <span className="text-[10px] font-bold uppercase tracking-wider text-indigo-700 bg-indigo-50 px-2 py-1 rounded-md">
+                          OAuth 2.0
+                        </span>
                       ) : (
-                        <button 
-                          onClick={() => handleConnectClick(integration)}
-                          className="px-4 py-1.5 bg-indigo-50 text-indigo-700 text-xs font-bold rounded-lg hover:bg-indigo-100 hover:text-indigo-800 transition"
-                        >
-                          Connect
-                        </button>
+                        <span className="text-[10px] font-bold uppercase tracking-wider text-gray-400 bg-gray-50 px-2 py-1 rounded-md">
+                          Connector
+                        </span>
                       )}
                     </div>
-                  </div>
-                </motion.div>
-              ))}
+
+                    <div className="flex items-start justify-between mb-4">
+                      <div className="w-12 h-12 rounded-2xl bg-gray-50 flex items-center justify-center border border-gray-100 shrink-0 group-hover:scale-110 transition-transform duration-300">
+                        {integration.logoUrl ? (
+                          <img src={integration.logoUrl} alt={integration.name} className="w-7 h-7 object-contain" />
+                        ) : (
+                          <Workflow className="w-6 h-6 text-gray-400" />
+                        )}
+                      </div>
+                    </div>
+
+                    <h3 className="text-lg font-bold text-gray-900 mb-1">{integration.name}</h3>
+                    <p className="text-sm text-gray-500 mb-2 flex-1 line-clamp-2">{integration.description}</p>
+                    
+                    {integration.lastActivity && (
+                      <p className="text-xs text-emerald-600 font-medium mb-4 truncate">
+                        {integration.lastActivity}
+                      </p>
+                    )}
+
+                    <div className="flex items-center justify-between mt-auto pt-3 border-t border-gray-50">
+                      <div className="flex items-center gap-2">
+                        {integration.status === 'Connected' && (
+                          <div className="w-2.5 h-2.5 rounded-full bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.6)] animate-pulse" />
+                        )}
+                        {integration.status === 'Disconnected' && <div className="w-2.5 h-2.5 rounded-full bg-gray-300" />}
+                        {integration.status === 'Coming Soon' && <div className="w-2.5 h-2.5 rounded-full bg-blue-400" />}
+                        {integration.status === 'Syncing' && <div className="w-2.5 h-2.5 rounded-full bg-amber-500 animate-bounce" />}
+                        {integration.status === 'Error' && <div className="w-2.5 h-2.5 rounded-full bg-red-500 animate-pulse" />}
+                        <span className={`text-xs font-bold uppercase tracking-wide
+                          ${integration.status === 'Connected' ? 'text-emerald-700' : ''}
+                          ${integration.status === 'Disconnected' ? 'text-gray-500' : ''}
+                          ${integration.status === 'Coming Soon' ? 'text-blue-600' : ''}
+                          ${integration.status === 'Syncing' ? 'text-amber-600' : ''}
+                          ${integration.status === 'Error' ? 'text-red-600' : ''}
+                        `}>
+                          {integration.status}
+                        </span>
+                      </div>
+
+                      <div className="flex items-center gap-1.5">
+                        {integration.status === 'Connected' ? (
+                          <>
+                            <Link 
+                              href={`/dashboard/integrations/${integration.id}/settings`}
+                              className="px-2.5 py-1.5 text-gray-600 hover:text-gray-900 hover:bg-gray-100 rounded-lg text-xs font-semibold transition flex items-center gap-1"
+                              title="Manage Integration"
+                            >
+                              <Settings2 className="w-3.5 h-3.5" /> Manage
+                            </Link>
+                            <button
+                              onClick={() => handleDisconnectClick(integration.id)}
+                              disabled={isDisconnecting}
+                              className="px-2.5 py-1.5 bg-rose-50 text-rose-700 hover:bg-rose-100 text-xs font-bold rounded-lg transition"
+                            >
+                              {isDisconnecting ? '...' : 'Disconnect'}
+                            </button>
+                            <Link 
+                              href={`/dashboard/integrations/${integration.id}`}
+                              className="px-3 py-1.5 bg-gray-900 text-white text-xs font-bold rounded-lg hover:bg-black transition flex items-center gap-1"
+                            >
+                              Open <ArrowRight className="w-3 h-3" />
+                            </Link>
+                          </>
+                        ) : integration.status === 'Coming Soon' ? (
+                          <button disabled className="px-4 py-1.5 bg-gray-100 text-gray-400 text-xs font-bold rounded-lg cursor-not-allowed">
+                            Soon
+                          </button>
+                        ) : (
+                          <button 
+                            onClick={() => handleConnectClick(integration)}
+                            className="px-4 py-1.5 bg-indigo-600 text-white text-xs font-bold rounded-lg hover:bg-indigo-700 transition flex items-center gap-1 shadow-sm"
+                          >
+                            Connect
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  </motion.div>
+                );
+              })}
             </div>
           )}
         </div>
       </div>
-
-      {/* Connection Modal Overlay */}
-      <AnimatePresence>
-        {connectionStep > 0 && selectedIntegration && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-gray-900/40 backdrop-blur-sm">
-            <motion.div 
-              initial={{ opacity: 0, scale: 0.95, y: 10 }}
-              animate={{ opacity: 1, scale: 1, y: 0 }}
-              exit={{ opacity: 0, scale: 0.95, y: 10 }}
-              className="bg-white rounded-3xl shadow-2xl w-full max-w-md overflow-hidden"
-            >
-              <div className="p-8 flex flex-col items-center text-center relative">
-                {connectionStep !== 5 && (
-                  <button 
-                    onClick={() => setConnectionStep(0)}
-                    className="absolute top-4 right-4 p-2 text-gray-400 hover:text-gray-900 rounded-full hover:bg-gray-100 transition"
-                  >
-                    ×
-                  </button>
-                )}
-
-                {/* Shared Header Icons */}
-                <div className="flex items-center gap-4 mb-6">
-                  <div className="w-14 h-14 rounded-2xl bg-gray-900 flex items-center justify-center shadow-lg">
-                    <span className="font-bold text-white text-xl">R</span>
-                  </div>
-                  
-                  {connectionStep < 4 ? (
-                    <div className="flex gap-1">
-                      <div className="w-1.5 h-1.5 rounded-full bg-gray-300 animate-pulse" />
-                      <div className="w-1.5 h-1.5 rounded-full bg-gray-300 animate-pulse delay-75" />
-                      <div className="w-1.5 h-1.5 rounded-full bg-gray-300 animate-pulse delay-150" />
-                    </div>
-                  ) : connectionStep === 5 ? (
-                    <motion.div 
-                      initial={{ scale: 0 }} 
-                      animate={{ scale: 1 }} 
-                      className="w-8 h-8 rounded-full bg-emerald-100 text-emerald-600 flex items-center justify-center"
-                    >
-                      <CheckCircle className="w-5 h-5" />
-                    </motion.div>
-                  ) : (
-                    <RefreshCw className="w-6 h-6 text-indigo-500 animate-spin" />
-                  )}
-
-                  <div className="w-14 h-14 rounded-2xl bg-white border border-gray-100 flex items-center justify-center shadow-lg p-3">
-                    {selectedIntegration.logoUrl ? (
-                      <img src={selectedIntegration.logoUrl} alt="Logo" className="w-full h-full object-contain" />
-                    ) : (
-                      <Workflow className="w-8 h-8 text-gray-400" />
-                    )}
-                  </div>
-                </div>
-
-                {/* Step 1 & 2: Loading State */}
-                {(connectionStep === 1 || connectionStep === 2) && (
-                  <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="flex flex-col items-center">
-                    <h2 className="text-xl font-bold text-gray-900 mb-2">
-                      {connectionStep === 1 ? 'Preparing Integration...' : 'Checking Permissions...'}
-                    </h2>
-                    <p className="text-sm text-gray-500">Establishing secure connection to {selectedIntegration.name}</p>
-                    <div className="w-full max-w-[200px] h-1.5 bg-gray-100 rounded-full mt-6 overflow-hidden">
-                      <motion.div 
-                        initial={{ width: "0%" }}
-                        animate={{ width: connectionStep === 1 ? "40%" : "80%" }}
-                        className="h-full bg-indigo-600 rounded-full"
-                      />
-                    </div>
-                  </motion.div>
-                )}
-
-                {/* Step 3: Fake OAuth */}
-                {connectionStep === 3 && (
-                  <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} className="w-full text-left">
-                    <h2 className="text-2xl font-bold text-gray-900 mb-1 text-center">Connect {selectedIntegration.name}</h2>
-                    <p className="text-sm text-gray-500 text-center mb-6">Roxten OS is requesting access to your account.</p>
-                    
-                    <div className="bg-gray-50 rounded-xl p-4 border border-gray-100 mb-6">
-                      <p className="text-xs font-bold text-gray-500 uppercase tracking-widest mb-3">Requested Permissions</p>
-                      <ul className="space-y-3">
-                        {selectedIntegration.scopes.length > 0 ? selectedIntegration.scopes.map(s => (
-                          <li key={s} className="flex items-start gap-2 text-sm text-gray-700">
-                            <CheckCircle className="w-4 h-4 text-emerald-500 shrink-0 mt-0.5" />
-                            <span>{s}</span>
-                          </li>
-                        )) : (
-                          <li className="flex items-start gap-2 text-sm text-gray-700">
-                            <CheckCircle className="w-4 h-4 text-emerald-500 shrink-0 mt-0.5" />
-                            <span>Full read/write access to workspace</span>
-                          </li>
-                        )}
-                      </ul>
-                    </div>
-
-                    <div className="flex items-center gap-3 bg-white border border-gray-200 rounded-xl p-3 mb-6">
-                      <div className="w-10 h-10 rounded-full bg-indigo-100 flex items-center justify-center text-indigo-700 font-bold">
-                        JD
-                      </div>
-                      <div>
-                        <p className="text-sm font-bold text-gray-900">John Doe</p>
-                        <p className="text-xs text-gray-500">john.doe@acmelogistics.com</p>
-                      </div>
-                    </div>
-
-                    <div className="flex gap-3">
-                      <button 
-                        onClick={() => setConnectionStep(0)}
-                        className="flex-1 py-3 bg-gray-100 text-gray-700 rounded-xl font-bold hover:bg-gray-200 transition"
-                      >
-                        Cancel
-                      </button>
-                      <button 
-                        onClick={handleOAuthApprove}
-                        className="flex-1 py-3 bg-indigo-600 text-white rounded-xl font-bold hover:bg-indigo-700 transition"
-                      >
-                        Approve Access
-                      </button>
-                    </div>
-                  </motion.div>
-                )}
-
-                {/* Step 4: Syncing */}
-                {connectionStep === 4 && (
-                  <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="flex flex-col items-center">
-                    <h2 className="text-xl font-bold text-gray-900 mb-2">Syncing Data...</h2>
-                    <p className="text-sm text-gray-500">Importing initial datasets from {selectedIntegration.name}</p>
-                    <div className="w-full max-w-[200px] h-1.5 bg-gray-100 rounded-full mt-6 overflow-hidden relative">
-                      <motion.div 
-                        animate={{ x: ["-100%", "200%"] }}
-                        transition={{ repeat: Infinity, duration: 1.5, ease: "linear" }}
-                        className="h-full w-1/2 bg-indigo-600 rounded-full absolute"
-                      />
-                    </div>
-                  </motion.div>
-                )}
-
-                {/* Step 5: Success */}
-                {connectionStep === 5 && (
-                  <motion.div initial={{ opacity: 0, scale: 0.9 }} animate={{ opacity: 1, scale: 1 }} className="flex flex-col items-center">
-                    <h2 className="text-2xl font-bold text-gray-900 mb-2">Successfully Connected!</h2>
-                    <p className="text-sm text-gray-500 mb-8">{selectedIntegration.name} is now fully integrated with Roxten OS.</p>
-                    
-                    <div className="flex gap-3 w-full">
-                      <button 
-                        onClick={() => setConnectionStep(0)}
-                        className="flex-1 py-3 bg-gray-100 text-gray-900 rounded-xl font-bold hover:bg-gray-200 transition"
-                      >
-                        Done
-                      </button>
-                      <Link 
-                        href={`/dashboard/integrations/${selectedIntegration.id}`}
-                        onClick={() => setConnectionStep(0)}
-                        className="flex-1 py-3 bg-indigo-600 text-white rounded-xl font-bold hover:bg-indigo-700 transition flex items-center justify-center gap-2"
-                      >
-                        Launch App <ArrowRight className="w-4 h-4" />
-                      </Link>
-                    </div>
-                  </motion.div>
-                )}
-              </div>
-            </motion.div>
-          </div>
-        )}
-      </AnimatePresence>
     </div>
+  );
+}
+
+export default function IntegrationsDashboard() {
+  return (
+    <Suspense fallback={<div className="p-8 text-gray-500 font-sans">Loading Integrations...</div>}>
+      <IntegrationsContent />
+    </Suspense>
   );
 }

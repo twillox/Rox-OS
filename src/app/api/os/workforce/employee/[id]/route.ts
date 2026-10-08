@@ -30,7 +30,7 @@ export async function GET(req: Request, { params }: { params: Promise<{ id: stri
       });
     }
 
-    const employee = await prisma.employee.findUnique({
+    let employee = await prisma.employee.findUnique({
       where: { id },
       include: {
         department: true,
@@ -39,6 +39,37 @@ export async function GET(req: Request, { params }: { params: Promise<{ id: stri
         }
       }
     });
+
+    if (!employee) {
+      employee = await prisma.employee.findFirst({
+        where: { id: { contains: id } },
+        include: {
+          department: true,
+          tasks: { orderBy: { createdAt: 'desc' } }
+        }
+      });
+    }
+
+    if (!employee) {
+      employee = await prisma.employee.findFirst({
+        where: { name: { contains: id, mode: 'insensitive' } },
+        include: {
+          department: true,
+          tasks: { orderBy: { createdAt: 'desc' } }
+        }
+      });
+    }
+
+    if (!employee) {
+      try {
+        const { ensureBusinessInitialized } = await import('@/lib/services/SeedService');
+        await ensureBusinessInitialized();
+        employee = await prisma.employee.findUnique({
+          where: { id },
+          include: { department: true, tasks: { orderBy: { createdAt: 'desc' } } }
+        });
+      } catch (e) {}
+    }
 
     if (!employee) {
       return NextResponse.json({ error: 'Employee not found' }, { status: 404 });
@@ -137,6 +168,7 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
         goals: data.goals !== undefined ? data.goals : undefined,
         decisionBoundaries: data.decisionBoundaries !== undefined ? data.decisionBoundaries : undefined,
         knowledgeAccessTags: data.knowledgeAccessTags !== undefined ? data.knowledgeAccessTags : undefined,
+        assignedIntegrations: data.assignedIntegrations !== undefined ? data.assignedIntegrations : undefined,
       }
     });
 
