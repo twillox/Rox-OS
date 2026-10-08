@@ -1,0 +1,5 @@
+{
+    "gitGuard.suppressedWarnings": [
+        ".next/"
+    ]
+}
