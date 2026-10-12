@@ -12,6 +12,12 @@ export class NotionProvider implements IntegrationProvider {
   }
 
   public getRedirectUri(baseUrl: string = 'http://localhost:3000'): string {
+    if (baseUrl && !baseUrl.includes('localhost')) {
+      return `${baseUrl}/api/integrations/notion/callback`;
+    }
+    if (process.env.NOTION_REDIRECT_URI && !process.env.NOTION_REDIRECT_URI.includes('localhost')) {
+      return process.env.NOTION_REDIRECT_URI;
+    }
     return process.env.NOTION_REDIRECT_URI || `${baseUrl}/api/integrations/notion/callback`;
   }
 

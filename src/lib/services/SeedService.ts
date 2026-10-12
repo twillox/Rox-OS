@@ -11,6 +11,11 @@ export async function ensureBusinessInitialized(businessId: string = DEFAULT_BUS
   // Check if business already exists and has full workforce populated
   let business = await prisma.business.findUnique({ where: { id: targetId } });
   if (business && business.name) {
+    // If it's a real user's business (not the default demo biz_roxten_corp), preserve it completely!
+    if (targetId !== DEFAULT_BUSINESS_ID) {
+      return business;
+    }
+
     const [existingDepts, existingEmps, existingTasks] = await Promise.all([
       prisma.department.findMany({ where: { businessId: targetId } }).catch(() => []),
       prisma.employee.findMany({ where: { businessId: targetId } }).catch(() => []),
@@ -20,6 +25,11 @@ export async function ensureBusinessInitialized(businessId: string = DEFAULT_BUS
     if (existingDepts.length >= 6 && existingEmps.length >= 6 && existingTasks.length >= 4) {
       return business;
     }
+  }
+
+  // If this is a custom user's company, never overwrite or seed with Roxten Technologies demo data!
+  if (targetId !== DEFAULT_BUSINESS_ID) {
+    return business || null;
   }
 
   if (isSeeding) {

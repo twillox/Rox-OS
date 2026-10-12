@@ -12,6 +12,12 @@ export class GitHubProvider implements IntegrationProvider {
   }
 
   public getRedirectUri(baseUrl: string = 'http://localhost:3000'): string {
+    if (baseUrl && !baseUrl.includes('localhost')) {
+      return `${baseUrl}/api/integrations/github/callback`;
+    }
+    if (process.env.GITHUB_REDIRECT_URI && !process.env.GITHUB_REDIRECT_URI.includes('localhost')) {
+      return process.env.GITHUB_REDIRECT_URI;
+    }
     return process.env.GITHUB_REDIRECT_URI || `${baseUrl}/api/integrations/github/callback`;
   }
 

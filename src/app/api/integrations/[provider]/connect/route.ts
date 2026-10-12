@@ -3,14 +3,7 @@ import { cookies } from 'next/headers';
 import crypto from 'crypto';
 import { IntegrationService } from '@/lib/integrations/IntegrationService';
 
-function getBaseUrl(req: Request): string {
-  if (process.env.NEXT_PUBLIC_APP_URL) {
-    return process.env.NEXT_PUBLIC_APP_URL.replace(/\/$/, '');
-  }
-  const host = req.headers.get('x-forwarded-host') || req.headers.get('host') || 'localhost:3000';
-  const proto = req.headers.get('x-forwarded-proto') || (host.includes('localhost') ? 'http' : 'https');
-  return `${proto}://${host}`;
-}
+import { getBaseUrl } from '@/lib/utils/url';
 
 export async function GET(
   req: Request,

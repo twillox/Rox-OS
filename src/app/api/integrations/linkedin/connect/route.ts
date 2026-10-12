@@ -3,22 +3,17 @@ import { cookies } from 'next/headers';
 import crypto from 'crypto';
 import { LinkedInProvider } from '@/lib/integrations/providers/LinkedInProvider';
 
-function getBaseUrl(req: Request): string {
-  if (process.env.NEXT_PUBLIC_APP_URL) {
-    return process.env.NEXT_PUBLIC_APP_URL.replace(/\/$/, '');
-  }
-  const host = req.headers.get('x-forwarded-host') || req.headers.get('host') || 'localhost:3000';
-  const proto = req.headers.get('x-forwarded-proto') || (host.includes('localhost') ? 'http' : 'https');
-  return `${proto}://${host}`;
-}
+import { getBaseUrl } from '@/lib/utils/url';
 
 export async function GET(req: Request) {
   try {
-    const clientId = process.env.LINKEDIN_CLIENT_ID;
-    const clientSecret = process.env.LINKEDIN_CLIENT_SECRET;
-    const redirectUri = process.env.LINKEDIN_REDIRECT_URI;
+    const baseUrl = getBaseUrl(req);
+    const provider = new LinkedInProvider();
+    const clientId = provider.getClientId();
+    const clientSecret = provider.getClientSecret();
+    const redirectUri = provider.getRedirectUri(baseUrl);
 
-    // Strict validation as specified: return standard missing configuration response
+    // Strict validation: return standard missing configuration response
     if (!clientId || !clientSecret || !redirectUri) {
       return NextResponse.json(
         {
@@ -32,9 +27,6 @@ export async function GET(req: Request) {
 
     const cookieStore = await cookies();
     const userId = cookieStore.get('userId')?.value || cookieStore.get('businessId')?.value || 'default_user';
-    const baseUrl = getBaseUrl(req);
-
-    const provider = new LinkedInProvider();
 
     // Generate secure cryptographically random state
     const stateNonce = crypto.randomBytes(24).toString('hex');

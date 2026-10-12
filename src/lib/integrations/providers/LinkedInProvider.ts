@@ -12,6 +12,12 @@ export class LinkedInProvider implements IntegrationProvider {
   }
 
   public getRedirectUri(baseUrl: string = 'http://localhost:3000'): string {
+    if (baseUrl && !baseUrl.includes('localhost')) {
+      return `${baseUrl}/api/integrations/linkedin/callback`;
+    }
+    if (process.env.LINKEDIN_REDIRECT_URI && !process.env.LINKEDIN_REDIRECT_URI.includes('localhost')) {
+      return process.env.LINKEDIN_REDIRECT_URI;
+    }
     return process.env.LINKEDIN_REDIRECT_URI || `${baseUrl}/api/integrations/linkedin/callback`;
   }
 

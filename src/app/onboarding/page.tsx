@@ -12,7 +12,7 @@ export default function OnboardingSelection() {
   useEffect(() => {
     const timer = setTimeout(() => {
       setShowIntro(false);
-    }, 3500);
+    }, 1500);
     return () => clearTimeout(timer);
   }, []);
 
@@ -22,11 +22,12 @@ export default function OnboardingSelection() {
         {showIntro ? (
           <motion.div
             key="intro"
+            onClick={() => setShowIntro(false)}
             initial={{ opacity: 0, scale: 0.9 }}
             animate={{ opacity: 1, scale: 1 }}
             exit={{ opacity: 0, scale: 1.1, filter: 'blur(10px)' }}
-            transition={{ duration: 1, ease: "easeInOut" }}
-            className="absolute inset-0 flex flex-col items-center justify-center space-y-8"
+            transition={{ duration: 0.6, ease: "easeInOut" }}
+            className="absolute inset-0 flex flex-col items-center justify-center space-y-8 cursor-pointer"
           >
             <div className="w-24 h-24 rounded-3xl bg-gradient-to-br from-indigo-50 to-purple-50 border border-indigo-100 flex items-center justify-center shadow-2xl shadow-indigo-500/20">
               <span className="text-4xl font-bold bg-clip-text text-transparent bg-gradient-to-br from-indigo-600 to-purple-600">R</span>

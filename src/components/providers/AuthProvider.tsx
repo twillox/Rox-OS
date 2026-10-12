@@ -38,28 +38,32 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
           email: firebaseUser.email,
           createdAt: new Date().toISOString(),
           role: 'CEO', // Default to CEO for Roxten OS setup
+          onboardingCompleted: false,
         };
         await setDoc(userDocRef, newUserData);
         setUserData(newUserData);
         currentData = newUserData;
       }
 
-      // Set auth cookies so Server APIs can partition data securely
-      const effectiveBusinessId = currentData?.businessId || 'biz_roxten_corp';
-      document.cookie = `userId=${firebaseUser.uid}; path=/`;
-      document.cookie = `businessId=${effectiveBusinessId}; path=/`;
-      
-      if (!currentData?.businessId) {
-        currentData = { ...currentData, businessId: effectiveBusinessId };
-        setUserData(currentData);
+      // Check whether user has genuinely completed onboarding for their company
+      const hasOnboarded = Boolean(
+        (currentData?.onboardingCompleted === true || (currentData?.businessId && currentData.businessId !== 'biz_roxten_corp')) &&
+        currentData?.businessId
+      );
+
+      document.cookie = `userId=${firebaseUser.uid}; path=/; SameSite=Lax`;
+
+      if (hasOnboarded && currentData?.businessId) {
+        document.cookie = `businessId=${currentData.businessId}; path=/; SameSite=Lax`;
+      } else {
+        // New user or un-onboarded account: clear businessId cookie to avoid displaying demo data
+        document.cookie = `businessId=; path=/; expires=Thu, 01 Jan 1970 00:00:00 GMT`;
       }
 
       return currentData;
     } catch (error) {
       console.error("Error fetching user data:", error);
-      document.cookie = `userId=${firebaseUser.uid}; path=/`;
-      document.cookie = `businessId=biz_roxten_corp; path=/`;
-      setUserData({ role: 'CEO', businessId: 'biz_roxten_corp' });
+      document.cookie = `userId=${firebaseUser.uid}; path=/; SameSite=Lax`;
       return null;
     }
   };
@@ -99,9 +103,21 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
           router.push('/login');
         }
       } else {
-        // User is authenticated, navigate them to dashboard if at login/root
-        if (inAuth) {
-          router.push('/dashboard');
+        const hasOnboarded = Boolean(
+          (userData?.onboardingCompleted === true || (userData?.businessId && userData.businessId !== 'biz_roxten_corp')) &&
+          userData?.businessId
+        );
+
+        if (!hasOnboarded) {
+          // New account or onboarding not complete: redirect to onboarding!
+          if (inDashboard || inAuth) {
+            router.push('/onboarding');
+          }
+        } else {
+          // Onboarding completed: redirect from login or root to dashboard
+          if (inAuth) {
+            router.push('/dashboard');
+          }
         }
       }
     }

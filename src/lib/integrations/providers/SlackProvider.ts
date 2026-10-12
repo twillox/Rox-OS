@@ -12,6 +12,12 @@ export class SlackProvider implements IntegrationProvider {
   }
 
   public getRedirectUri(baseUrl: string = 'http://localhost:3000'): string {
+    if (baseUrl && !baseUrl.includes('localhost')) {
+      return `${baseUrl}/api/integrations/slack/callback`;
+    }
+    if (process.env.SLACK_REDIRECT_URI && !process.env.SLACK_REDIRECT_URI.includes('localhost')) {
+      return process.env.SLACK_REDIRECT_URI;
+    }
     return process.env.SLACK_REDIRECT_URI || `${baseUrl}/api/integrations/slack/callback`;
   }
 

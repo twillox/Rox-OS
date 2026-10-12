@@ -24,7 +24,7 @@ export default function CEODeskClient() {
         const { db } = await import('@/lib/firebase');
         const { doc, getDoc, updateDoc } = await import('firebase/firestore');
         
-        const businessId = document.cookie.split('; ').find(row => row.startsWith('businessId='))?.split('=')[1] || 'biz_roxten_corp';
+        const businessId = document.cookie.split('; ').find(row => row.startsWith('businessId='))?.split('=')[1];
         if (!businessId) return;
 
         const docRef = doc(db, 'companies', businessId);

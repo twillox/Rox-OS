@@ -124,7 +124,8 @@ export default function ExistingBusinessOnboarding() {
         try {
           const { doc, updateDoc } = await import('firebase/firestore');
           await updateDoc(doc(db, 'users', user.uid), {
-            businessId: businessId
+            businessId: businessId,
+            onboardingCompleted: true
           });
         } catch (usrErr: any) {
           console.warn('Client user updateDoc skipped (permission fallback):', usrErr?.message);
